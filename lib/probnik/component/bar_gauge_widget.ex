@@ -71,7 +71,7 @@ defmodule Probnik.Component.BarGaugeWidget do
       result when is_list(result) and length(result) > 0 ->
         Enum.map(result, fn {pid, value, info} ->
           real_initial_call = :rpc.call(target, :proc_lib, :initial_call, [pid], 2000)
-          %{pid: pid, value: value, name: extract_name(info, real_initial_call)}
+          extract_process_info(pid, value, info, real_initial_call)
         end)
 
       _ ->
@@ -91,51 +91,89 @@ defmodule Probnik.Component.BarGaugeWidget do
     :recon.proc_count(attribute, 5)
     |> Enum.map(fn {pid, value, info} ->
       real_initial_call = :proc_lib.initial_call(pid)
-      %{pid: pid, value: value, name: extract_name(info, real_initial_call)}
+      extract_process_info(pid, value, info, real_initial_call)
     end)
   rescue
     _ -> []
   end
 
-  defp extract_name(info, real_initial_call) when is_list(info) do
+  defp extract_process_info(pid, value, info, real_initial_call) do
+    reg_name = extract_registered_name(info)
+    {proc_type, module_fn} = extract_type_and_module(info, real_initial_call)
+
+    # Display name: prefer registered name, fallback to module.function
+    display_name = if reg_name, do: reg_name, else: module_fn
+
+    %{
+      pid: pid,
+      value: value,
+      type: proc_type,
+      registered_name: reg_name,
+      module_fn: module_fn,
+      name: display_name
+    }
+  end
+
+  defp extract_registered_name(info) do
     reg_name = Keyword.get(info, :registered_name)
 
     cond do
-      # Registered name is a proper atom (not nil, not empty list)
       is_atom(reg_name) and reg_name != nil ->
         Atom.to_string(reg_name)
 
-      # Registered name is a list with an atom (e.g., [:Argument__1])
       is_list(reg_name) and length(reg_name) > 0 and is_atom(hd(reg_name)) ->
         reg_name |> hd() |> Atom.to_string()
 
-      # Use real initial call from proc_lib
-      is_tuple(real_initial_call) and tuple_size(real_initial_call) == 3 ->
-        extract_mfa(real_initial_call)
-
-      # Fallback to initial_call from info
-      Keyword.has_key?(info, :initial_call) ->
-        extract_mfa(Keyword.get(info, :initial_call))
-
       true ->
-        "-"
+        nil
     end
   rescue
-    _ -> "-"
+    _ -> nil
   end
 
-  defp extract_name(_, _), do: "-"
+  defp extract_type_and_module(info, real_initial_call) do
+    initial_call = if is_tuple(real_initial_call) and tuple_size(real_initial_call) == 3 do
+      real_initial_call
+    else
+      Keyword.get(info, :initial_call)
+    end
 
-  defp extract_mfa({m, f, a}) when is_atom(m) and is_atom(f) do
-    module =
-      m
-      |> Atom.to_string()
-      |> String.replace("Elixir.", "")
+    case initial_call do
+      {mod, fun, arity} when is_atom(mod) ->
+        mod_str = mod |> Atom.to_string() |> String.replace("Elixir.", "")
+        module_fn = "#{mod_str}.#{fun}/#{arity}"
 
-    "#{module}.#{f}/#{a}"
+        proc_type = cond do
+          String.contains?(mod_str, "Supervisor") -> "SUP"
+          String.contains?(mod_str, "GenServer") or fun == :init -> "GEN"
+          String.contains?(mod_str, "GenEvent") -> "GEV"
+          String.contains?(mod_str, "GenStateMachine") -> "GSM"
+          String.contains?(mod_str, "Task") -> "TSK"
+          String.contains?(mod_str, "Agent") -> "AGT"
+          String.contains?(mod_str, "Phoenix") -> "PHX"
+          String.contains?(mod_str, "Plug") -> "PLG"
+          String.contains?(mod_str, "Ecto") -> "ECT"
+          String.contains?(mod_str, "Logger") -> "LOG"
+          String.contains?(mod_str, "Telemetry") -> "TEL"
+          String.contains?(mod_str, "Finch") -> "FIN"
+          String.contains?(mod_str, "Mint") -> "MNT"
+          String.contains?(mod_str, "Bandit") -> "BAN"
+          String.contains?(mod_str, "Registry") -> "REG"
+          String.contains?(mod_str, "DynamicSupervisor") -> "DYN"
+          mod_str == "proc_lib" -> "PRC"
+          mod_str == "gen" -> "GEN"
+          mod_str == "supervisor" -> "SUP"
+          true -> "PRC"
+        end
+
+        {proc_type, module_fn}
+
+      _ ->
+        {"PRC", "-"}
+    end
+  rescue
+    _ -> {"PRC", "-"}
   end
-
-  defp extract_mfa(other), do: inspect(other)
 
   # Intelligently shorten name to show rightmost distinct Module.Function/Arity
   defp shorten_name(name, max_len) when is_binary(name) do
@@ -182,18 +220,34 @@ defmodule Probnik.Component.BarGaugeWidget do
     # Find max value for scaling bars
     max_val = procs |> Enum.map(& &1.value) |> Enum.max(fn -> 1 end)
 
-    Graph.build(font: :roboto, font_size: 36)
+    Graph.build(font: :roboto_mono, font_size: 36)
     |> rect({config.width, config.height}, fill: c.bg, stroke: {3, c.border})
     |> draw_header(config, c)
     |> draw_rows(procs, max_val, config, c)
   end
 
   defp draw_header(graph, config, c) do
+    # Column header for value (GB for memory, count for msgq)
+    value_header = if config.attribute == :memory, do: "GB", else: "Cnt"
+
+    # Layout: 5% type, 35% name, 10% value, 50% meter
+    type_width = config.width * 0.05
+    name_width = config.width * 0.35
+    value_x = type_width + name_width + config.width * 0.1
+
     graph
     |> text(config.title,
       fill: c.primary,
+      font: :roboto_mono,
       font_size: 42,
-      translate: {30, 50}
+      translate: {type_width + 5, 50}
+    )
+    |> text(value_header,
+      fill: c.secondary,
+      font: :roboto_mono,
+      font_size: 28,
+      text_align: :right,
+      translate: {value_x - 10, 50}
     )
     |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
   end
@@ -203,8 +257,9 @@ defmodule Probnik.Component.BarGaugeWidget do
     graph
     |> text("No data - check node connection",
       fill: c.warning,
+      font: :roboto_mono,
       font_size: 36,
-      translate: {config.width / 2 - 200, config.height / 2}
+      translate: {config.width / 2 - 250, config.height / 2}
     )
   end
 
@@ -220,16 +275,22 @@ defmodule Probnik.Component.BarGaugeWidget do
     y = @header_height + 8 + (idx - 1) * @row_height
     row_inner_height = @row_height - 12
 
-    # Layout: 40% name, 60% meter
-    name_width = config.width * 0.4
-    meter_x = name_width
-    meter_width = config.width - meter_x - 20
+    # Layout: 5% type, 35% name, 10% value, 50% meter
+    type_width = config.width * 0.05
+    name_width = config.width * 0.35
+    value_x = type_width + name_width
+    value_width = config.width * 0.1
+    meter_x = value_x + value_width
+    meter_width = config.width - meter_x - 15
 
-    # Process name - intelligently shortened
-    name_str = shorten_name(proc.name, 28)
+    # Process type (GS, Sup, Task, etc.)
+    type_str = Map.get(proc, :type, "Proc")
 
-    # Value
-    value_str = format_value(proc.value, config.attribute)
+    # Process name - show registered name or module.function
+    name_str = shorten_name(proc.name, 26)
+
+    # Value - GB with 2 decimals for memory
+    value_str = format_value_display(proc.value, config.attribute)
 
     # Calculate bar fill ratio
     ratio = if max_val > 0, do: proc.value / max_val, else: 0
@@ -241,38 +302,64 @@ defmodule Probnik.Component.BarGaugeWidget do
     # Color gradient based on ranking
     bar_colors = get_bar_colors(idx, c)
 
-    # Rank color
-    rank_color =
-      case idx do
-        1 -> c.critical
-        2 -> c.warning
-        3 -> c.accent
-        _ -> c.secondary
-      end
+    # Type color based on process type
+    type_color = get_type_color(type_str, c)
 
     graph
-    # Rank number
-    |> text("#{idx}.",
-      fill: rank_color,
-      font_size: 36,
-      translate: {15, y + row_inner_height / 2 + 12}
+    # Type - 5% left
+    |> text(type_str,
+      fill: type_color,
+      font: :roboto_mono,
+      font_size: 28,
+      translate: {8, y + row_inner_height / 2 + 10}
     )
-    # Name - left side, large
+    # Name - after type
     |> text(name_str,
       fill: c.primary,
-      font_size: 40,
-      translate: {55, y + row_inner_height / 2 + 12}
+      font: :roboto_mono,
+      font_size: 36,
+      translate: {type_width + 5, y + row_inner_height / 2 + 12}
     )
-    # Value - above meter
+    # Value - in the 10% area before meter
     |> text(value_str,
-      fill: c.secondary,
-      font_size: 28,
+      fill: c.primary,
+      font: :roboto_mono,
+      font_size: 32,
       text_align: :right,
-      translate: {config.width - 25, y + 22}
+      translate: {meter_x - 10, y + row_inner_height / 2 + 10}
     )
     # Draw bar segments - full height
     |> draw_bar_segments(meter_x, y + 4, segment_width, segment_gap, row_inner_height, ratio, bar_colors, c)
   end
+
+  defp get_type_color(type, c) do
+    case type do
+      "GEN" -> c.accent      # GenServer
+      "SUP" -> c.warning     # Supervisor
+      "DYN" -> c.warning     # DynamicSupervisor
+      "TSK" -> c.primary     # Task
+      "PHX" -> c.critical    # Phoenix
+      "ECT" -> c.accent      # Ecto
+      "LOG" -> c.secondary   # Logger
+      "TEL" -> c.secondary   # Telemetry
+      "FIN" -> c.accent      # Finch
+      "BAN" -> c.critical    # Bandit
+      "REG" -> c.primary     # Registry
+      _ -> c.secondary
+    end
+  end
+
+  # Format value for display in the value column
+  defp format_value_display(bytes, :memory) do
+    gb = bytes / 1024 / 1024 / 1024
+    :erlang.float_to_binary(gb, decimals: 2)
+  end
+
+  defp format_value_display(count, :message_queue_len) do
+    Integer.to_string(count)
+  end
+
+  defp format_value_display(value, _), do: inspect(value)
 
   defp draw_bar_segments(graph, bar_x, bar_y, segment_width, gap, height, ratio, colors, c) do
     active_segments = trunc(ratio * @bar_segments)
@@ -328,33 +415,4 @@ defmodule Probnik.Component.BarGaugeWidget do
   defp dim_color({r, g, b, a}, factor) do
     {trunc(r * factor), trunc(g * factor), trunc(b * factor), a}
   end
-
-  defp truncate(str, max_len) when is_binary(str) do
-    if String.length(str) > max_len do
-      String.slice(str, 0, max_len - 2) <> ".."
-    else
-      str
-    end
-  end
-
-  defp truncate(other, max_len), do: truncate(inspect(other), max_len)
-
-  defp format_value(bytes, :memory) do
-    cond do
-      bytes < 1024 -> "#{bytes} B"
-      bytes < 1024 * 1024 -> "#{Float.round(bytes / 1024, 1)} KB"
-      bytes < 1024 * 1024 * 1024 -> "#{Float.round(bytes / 1024 / 1024, 1)} MB"
-      true -> "#{Float.round(bytes / 1024 / 1024 / 1024, 2)} GB"
-    end
-  end
-
-  defp format_value(count, :message_queue_len) do
-    cond do
-      count < 1000 -> "#{count}"
-      count < 1_000_000 -> "#{Float.round(count / 1000, 1)}K"
-      true -> "#{Float.round(count / 1_000_000, 1)}M"
-    end
-  end
-
-  defp format_value(value, _), do: inspect(value)
 end
