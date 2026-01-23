@@ -11,9 +11,9 @@ defmodule Probnik.Component.BarGaugeWidget do
   import Scenic.Primitives
 
   @update_interval 1000
-  @row_height 110
+  @row_height 100
   @header_height 70
-  @bar_segments 10
+  @bar_segments 30  # 3x more segments, skinnier marks
 
   @impl Scenic.Component
   def validate(opts) when is_list(opts), do: {:ok, opts}
@@ -63,20 +63,36 @@ defmodule Probnik.Component.BarGaugeWidget do
   defp fetch_top5(attribute) do
     target = Probnik.Application.target_node()
 
-    case :rpc.call(target, :recon, :proc_count, [attribute, 5], 5000) do
+    result = case :rpc.call(target, :recon, :proc_count, [attribute, 5], 5000) do
       {:badrpc, reason} ->
-        IO.puts("RPC to #{target} failed: #{inspect(reason)}")
-        []
+        IO.puts("RPC to #{target} failed: #{inspect(reason)}, using local")
+        fetch_local(attribute)
 
-      result when is_list(result) ->
+      result when is_list(result) and length(result) > 0 ->
         Enum.map(result, fn {pid, value, info} ->
           real_initial_call = :rpc.call(target, :proc_lib, :initial_call, [pid], 2000)
           %{pid: pid, value: value, name: extract_name(info, real_initial_call)}
         end)
 
       _ ->
-        []
+        IO.puts("RPC returned empty, using local")
+        fetch_local(attribute)
     end
+
+    IO.puts("fetch_top5(#{attribute}): got #{length(result)} processes")
+    result
+  rescue
+    e ->
+      IO.puts("fetch_top5 error: #{inspect(e)}")
+      fetch_local(attribute)
+  end
+
+  defp fetch_local(attribute) do
+    :recon.proc_count(attribute, 5)
+    |> Enum.map(fn {pid, value, info} ->
+      real_initial_call = :proc_lib.initial_call(pid)
+      %{pid: pid, value: value, name: extract_name(info, real_initial_call)}
+    end)
   rescue
     _ -> []
   end
@@ -85,29 +101,80 @@ defmodule Probnik.Component.BarGaugeWidget do
     reg_name = Keyword.get(info, :registered_name)
 
     cond do
-      is_atom(reg_name) and reg_name not in [nil, []] ->
+      # Registered name is a proper atom (not nil, not empty list)
+      is_atom(reg_name) and reg_name != nil ->
         Atom.to_string(reg_name)
 
+      # Registered name is a list with an atom (e.g., [:Argument__1])
+      is_list(reg_name) and length(reg_name) > 0 and is_atom(hd(reg_name)) ->
+        reg_name |> hd() |> Atom.to_string()
+
+      # Use real initial call from proc_lib
       is_tuple(real_initial_call) and tuple_size(real_initial_call) == 3 ->
         extract_mfa(real_initial_call)
+
+      # Fallback to initial_call from info
+      Keyword.has_key?(info, :initial_call) ->
+        extract_mfa(Keyword.get(info, :initial_call))
 
       true ->
         "-"
     end
+  rescue
+    _ -> "-"
   end
 
   defp extract_name(_, _), do: "-"
 
-  defp extract_mfa({m, f, _a}) when is_atom(m) and is_atom(f) do
+  defp extract_mfa({m, f, a}) when is_atom(m) and is_atom(f) do
     module =
       m
       |> Atom.to_string()
       |> String.replace("Elixir.", "")
 
-    "#{module}.#{f}"
+    "#{module}.#{f}/#{a}"
   end
 
   defp extract_mfa(other), do: inspect(other)
+
+  # Intelligently shorten name to show rightmost distinct Module.Function/Arity
+  defp shorten_name(name, max_len) when is_binary(name) do
+    if String.length(name) <= max_len do
+      name
+    else
+      # Try to show the most significant part (rightmost module + function)
+      parts = String.split(name, ".")
+
+      case parts do
+        [single] ->
+          # No dots, just truncate
+          String.slice(single, 0, max_len - 2) <> ".."
+
+        parts when length(parts) >= 2 ->
+          # Get last two parts (Module.function/arity)
+          [second_last, last] = Enum.take(parts, -2)
+          short = "#{second_last}.#{last}"
+
+          if String.length(short) <= max_len do
+            short
+          else
+            # Still too long, truncate the module part
+            available = max_len - String.length(last) - 3
+            if available > 3 do
+              String.slice(second_last, 0, available) <> "..#{last}"
+            else
+              String.slice(name, -max_len + 2, max_len - 2) <> ".."
+            end
+          end
+
+        _ ->
+          String.slice(name, 0, max_len - 2) <> ".."
+      end
+    end
+  end
+
+  defp shorten_name(nil, _max_len), do: "-"
+  defp shorten_name(other, max_len) when not is_binary(other), do: shorten_name(inspect(other), max_len)
 
   defp build_graph(procs, config) do
     c = ColorScheme.current()
@@ -131,6 +198,16 @@ defmodule Probnik.Component.BarGaugeWidget do
     |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
   end
 
+  defp draw_rows(graph, [], _max_val, config, c) do
+    # Show message when no data
+    graph
+    |> text("No data - check node connection",
+      fill: c.warning,
+      font_size: 36,
+      translate: {config.width / 2 - 200, config.height / 2}
+    )
+  end
+
   defp draw_rows(graph, procs, max_val, config, c) do
     procs
     |> Enum.with_index(1)
@@ -140,10 +217,16 @@ defmodule Probnik.Component.BarGaugeWidget do
   end
 
   defp draw_row(graph, proc, idx, max_val, config, c) do
-    y = @header_height + 15 + (idx - 1) * @row_height
+    y = @header_height + 8 + (idx - 1) * @row_height
+    row_inner_height = @row_height - 12
 
-    # Process name - BIG
-    name_str = truncate(proc.name, 40)
+    # Layout: 40% name, 60% meter
+    name_width = config.width * 0.4
+    meter_x = name_width
+    meter_width = config.width - meter_x - 20
+
+    # Process name - intelligently shortened
+    name_str = shorten_name(proc.name, 28)
 
     # Value
     value_str = format_value(proc.value, config.attribute)
@@ -151,33 +234,44 @@ defmodule Probnik.Component.BarGaugeWidget do
     # Calculate bar fill ratio
     ratio = if max_val > 0, do: proc.value / max_val, else: 0
 
-    # Bar dimensions
-    bar_x = 30
-    bar_y = y + 55
-    bar_width = config.width - 60
-    bar_height = 28
-    segment_width = bar_width / @bar_segments
-    segment_gap = 4
+    # Bar dimensions - full height, skinny segments
+    segment_width = meter_width / @bar_segments
+    segment_gap = 2
 
     # Color gradient based on ranking
     bar_colors = get_bar_colors(idx, c)
 
+    # Rank color
+    rank_color =
+      case idx do
+        1 -> c.critical
+        2 -> c.warning
+        3 -> c.accent
+        _ -> c.secondary
+      end
+
     graph
-    # Name - large, prominent
+    # Rank number
+    |> text("#{idx}.",
+      fill: rank_color,
+      font_size: 36,
+      translate: {15, y + row_inner_height / 2 + 12}
+    )
+    # Name - left side, large
     |> text(name_str,
       fill: c.primary,
-      font_size: 44,
-      translate: {bar_x, y + 40}
+      font_size: 40,
+      translate: {55, y + row_inner_height / 2 + 12}
     )
-    # Value - right aligned
+    # Value - above meter
     |> text(value_str,
       fill: c.secondary,
-      font_size: 36,
+      font_size: 28,
       text_align: :right,
-      translate: {config.width - 30, y + 40}
+      translate: {config.width - 25, y + 22}
     )
-    # Draw bar segments
-    |> draw_bar_segments(bar_x, bar_y, segment_width, segment_gap, bar_height, ratio, bar_colors, c)
+    # Draw bar segments - full height
+    |> draw_bar_segments(meter_x, y + 4, segment_width, segment_gap, row_inner_height, ratio, bar_colors, c)
   end
 
   defp draw_bar_segments(graph, bar_x, bar_y, segment_width, gap, height, ratio, colors, c) do
@@ -205,25 +299,25 @@ defmodule Probnik.Component.BarGaugeWidget do
   end
 
   defp get_bar_colors(rank, c) do
-    # Color gradient: green -> yellow -> red based on rank
+    # Color gradient for 30 segments based on rank
     case rank do
       1 ->
         # Red gradient for top consumer
-        List.duplicate(c.critical, 4) ++
-          List.duplicate(c.warning, 3) ++
-          List.duplicate(c.accent, 3)
+        List.duplicate(c.critical, 12) ++
+          List.duplicate(c.warning, 10) ++
+          List.duplicate(c.accent, 8)
 
       2 ->
         # Orange/yellow gradient
-        List.duplicate(c.warning, 3) ++
-          List.duplicate(c.accent, 4) ++
-          List.duplicate(c.primary, 3)
+        List.duplicate(c.warning, 10) ++
+          List.duplicate(c.accent, 12) ++
+          List.duplicate(c.primary, 8)
 
       _ ->
         # Normal gradient
-        List.duplicate(c.accent, 3) ++
-          List.duplicate(c.primary, 4) ++
-          List.duplicate(c.secondary, 3)
+        List.duplicate(c.accent, 10) ++
+          List.duplicate(c.primary, 12) ++
+          List.duplicate(c.secondary, 8)
     end
   end
 
