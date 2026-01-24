@@ -23,7 +23,7 @@ iex --sname probnik@localhost --cookie secret_token -S mix scenic.run
      - Large + / - values at left
      - Mini VSI dial to the right
 4) Memory Breakdown
-   - Total memory and distribution:
+   - Distribution across:
      - Processes, ETS, Binary, Code, Other
 
 ## Data Sources

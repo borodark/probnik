@@ -113,8 +113,7 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
     Graph.build(font: :courier, font_size: 24)
     |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
     |> draw_header(config, c)
-    |> draw_total(data.total, c)
-    |> draw_rows(data.rows, data.total, config, c)
+    |> draw_category_bars(data.rows, data.total, config, c)
   end
 
   defp draw_header(graph, config, c) do
@@ -128,56 +127,45 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
     |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
   end
 
-  defp draw_total(graph, total, c) do
-    graph
-    |> text("Total: #{format_mb(total)}",
-      fill: c.secondary,
-      font: :courier,
-      font_size: 22,
-      translate: {20, @header_height + 35}
-    )
-  end
-
-  defp draw_rows(graph, rows, total, config, c) do
-    start_y = @header_height + 60
-    bar_x = 220
-    bar_width = config.width - bar_x - 30
+  defp draw_category_bars(graph, rows, total, config, c) do
+    # Transposed list into vertical bar diagram
+    area_x = 30
+    area_y = @header_height + 70
+    area_width = config.width - 60
+    label_band = 24
+    area_height = config.height - area_y - label_band - 10
+    count = max(length(rows), 1)
+    gap = 14
+    bar_width = max((area_width - gap * (count - 1)) / count, 18)
 
     rows
     |> Enum.with_index(0)
     |> Enum.reduce(graph, fn {row, idx}, g ->
-      y = start_y + idx * @row_height
       ratio = if total > 0, do: row.value / total, else: 0.0
-      fill_w = bar_width * ratio
+      bar_h = area_height * ratio
       color = row_color(row.key, c)
+      x = area_x + idx * (bar_width + gap)
+      y = area_y + (area_height - bar_h)
+      label_y = area_y + area_height + 18
 
       g
+      |> rect({bar_width, bar_h},
+        fill: color,
+        translate: {x, y}
+      )
       |> text(row.label,
         fill: c.primary,
         font: :courier,
-      font_size: 20,
-        translate: {20, y + 35}
+        font_size: 18,
+        text_align: :center,
+        translate: {x + bar_width / 2, label_y}
       )
       |> text(format_mb(row.value),
         fill: c.secondary,
         font: :courier,
-      font_size: 20,
-        text_align: :right,
-        translate: {bar_x - 10, y + 35}
-      )
-      |> rrect({bar_width, 24, 4},
-        fill: dim_color(c.primary, 0.15),
-        translate: {bar_x, y + 15}
-      )
-      |> rrect({fill_w, 24, 4},
-        fill: color,
-        translate: {bar_x, y + 15}
-      )
-      |> text(pct(ratio),
-        fill: c.bg,
-        font: :courier,
-        font_size: 18,
-        translate: {bar_x + 8, y + 32}
+        font_size: 16,
+        text_align: :center,
+        translate: {x + bar_width / 2, y - 8}
       )
     end)
   end

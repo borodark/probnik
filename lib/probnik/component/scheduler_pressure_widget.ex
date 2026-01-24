@@ -283,31 +283,31 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
     graph
     |> draw_pressure_fill(x, y, width, height, ratio)
-    |> draw_vsi_texts(x + 10, y, 140, height, runq_rate, c)
-    |> draw_vsi_circle(x + 240, y + height / 2, 76, runq_rate, glow_intensity, c)
+    #|> draw_vsi_texts(x + 10, y, 140, height, runq_rate, c)
+    |> draw_vsi_circle(x + 320, y + height / 2, 200, runq_rate, glow_intensity, c)
     |> text("RunQ #{data.run_queue_total}",
-      fill: pressure_text_color(rq_ratio, c),
+      fill: runq_glow_color(rq_ratio),
       font: :courier,
-      font_size: 26,
-      translate: {x + 12, y + 34}
+      font_size: 48,
+      translate: {x + 12, y + 32}
     )
     |> text("avg #{format_float(avg_rq, 1)}",
-      fill: pressure_text_color(rq_ratio, c),
+      fill: runq_glow_color(rq_ratio),
       font: :courier,
-      font_size: 22,
-      translate: {x + 12, y + 62}
+      font_size: 48,
+      translate: {x + 12, y + 78}
     )
     |> text("skew #{rq_skew}",
-      fill: pressure_text_color(rq_ratio, c),
+      fill: runq_glow_color(rq_ratio),
       font: :courier,
-      font_size: 22,
-      translate: {x + 12, y + 88}
+      font_size: 48,
+      translate: {x + 12, y + 460}
     )
     |> text("util #{pct(usage_ratio)}",
-      fill: pressure_text_color(rq_ratio, c),
+      fill: runq_glow_color(rq_ratio),
       font: :courier,
-      font_size: 22,
-      translate: {x + 12, y + 114}
+      font_size: 48,
+      translate: {x + 12, y + 500}
     )
     |> line({{needle_x, y - 6}, {needle_x, y + height + 6}}, stroke: {3, c.needle})
   end
@@ -348,18 +348,18 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     graph
   end
 
-  defp draw_vsi_texts(graph, x, y, width, height, rate, c) do
-    half = height / 2
-    font_size = trunc(half * 0.7)
-    pos_val = if rate > 0, do: "+#{round(rate)}", else: ""
-    neg_val = if rate < 0, do: "-#{round(abs(rate))}", else: ""
-    pos_color = glow_color(rate, :pos, c)
-    neg_color = glow_color(rate, :neg, c)
+  #defp draw_vsi_texts(graph, x, y, width, height, rate, c) do
+  #  half = height / 2
+  #  font_size = trunc(half * 0.24)
+  #  pos_val = if rate > 0, do: "+#{round(rate)}", else: ""
+  #  neg_val = if rate < 0, do: "-#{round(abs(rate))}", else: ""
+  #  pos_color = glow_color(rate, :pos, c)
+  #  neg_color = glow_color(rate, :neg, c)#
 
-    graph
-    |> maybe_text(pos_val, pos_color, font_size, x + width / 2, y + half / 2 + font_size / 3)
-    |> maybe_text(neg_val, neg_color, font_size, x + width / 2, y + half + half / 2 + font_size / 3)
-  end
+  #  graph
+  #  |> maybe_text(pos_val, pos_color, font_size, x + width / 2, y + half / 2 + font_size / 3)
+  #  |> maybe_text(neg_val, neg_color, font_size, x + width / 2, y + half + half / 2 + font_size / 3)
+  #end
 
   defp draw_vsi_circle(graph, cx, cy, radius, rate, glow_intensity, c) do
     clamped = max(-@vsi_max_rate, min(@vsi_max_rate, rate))
@@ -376,6 +376,13 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     |> draw_vsi_ticks(cx, cy, radius, c)
     |> line({{cx, cy}, {x2, y2}}, stroke: {3, c.needle}, cap: :round)
     |> circle(3, fill: c.needle, translate: {cx, cy})
+    |> text("Δ runq/sec",
+      fill: {0, 0, 0},
+      font: :courier_bold,
+      font_size: 32,
+      text_align: :center,
+      translate: {cx, cy + radius * 0.45}
+    )
     |> draw_vsi_chevrons(cx, cy, radius, rate, c)
   end
 
@@ -467,7 +474,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     graph
     |> text(label,
       fill: color,
-      font: :courier_bold,
+    font: :roboto,
       font_size: size,
       text_align: :center,
       translate: {x, y}
@@ -511,9 +518,25 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     }
   end
 
-  defp pressure_text_color(ratio, c) do
-    base = pressure_fill_color(ratio)
-    lerp_color(base, c.accent, 0.35)
+  defp runq_glow_color(ratio) do
+    t = min(max(ratio, 0.0), 1.0)
+
+    cond do
+      t <= 0.2 ->
+        lerp_color({0, 0, 0}, {140, 60, 0}, t / 0.2)
+
+      t <= 0.4 ->
+        lerp_color({140, 60, 0}, {220, 120, 0}, (t - 0.2) / 0.2)
+
+      t <= 0.6 ->
+        lerp_color({220, 120, 0}, {180, 140, 0}, (t - 0.4) / 0.2)
+
+      t <= 0.8 ->
+        lerp_color({180, 140, 0}, {255, 210, 0}, (t - 0.6) / 0.2)
+
+      true ->
+        lerp_color({255, 210, 0}, {255, 0, 0}, (t - 0.8) / 0.2)
+    end
   end
 
   defp pressure_fill_color(ratio) do

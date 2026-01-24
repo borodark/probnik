@@ -23,10 +23,8 @@ defmodule Probnik.Scene.Main do
     padding_bottom = 20
     row_gap = 10
     widget_width = @screen_width - padding_x * 2
-    top_widget_height = 36 + 2 + 60 * 5 + 8
-    bottom_total = @screen_height - padding_top - padding_bottom - row_gap * 3 - top_widget_height * 2
-    scheduler_height = 250
-    memory_breakdown_height = bottom_total - scheduler_height
+    available_height = @screen_height - padding_top - padding_bottom - row_gap * 3
+    widget_height = available_height / 4
 
     graph =
       Graph.build(font: :courier, font_size: 24)
@@ -34,7 +32,7 @@ defmodule Probnik.Scene.Main do
       # Row 1: Memory Top 5
       |> BarGaugeWidget.add_to_graph([
         width: widget_width,
-        height: top_widget_height,
+        height: widget_height,
         attribute: :memory,
         title: "MEMORY TOP 5"
       ],
@@ -44,30 +42,30 @@ defmodule Probnik.Scene.Main do
       # Row 2: Message Queue Top 5
       |> BarGaugeWidget.add_to_graph([
         width: widget_width,
-        height: top_widget_height,
+        height: widget_height,
         attribute: :message_queue_len,
         title: "MESSAGE QUEUE TOP 5"
       ],
         id: :msgq_top5,
-        translate: {padding_x, padding_top + top_widget_height + row_gap}
+        translate: {padding_x, padding_top + widget_height + row_gap}
       )
       # Row 3: Scheduler Pressure
       |> SchedulerPressureWidget.add_to_graph([
         width: widget_width,
-        height: scheduler_height,
+        height: widget_height,
         title: "SCHEDULER PRESSURE"
       ],
         id: :scheduler_pressure,
-        translate: {padding_x, padding_top + (top_widget_height + row_gap) * 2}
+        translate: {padding_x, padding_top + (widget_height + row_gap) * 2}
       )
       # Row 4: Memory Breakdown
       |> MemoryBreakdownWidget.add_to_graph([
         width: widget_width,
-        height: memory_breakdown_height,
+        height: widget_height,
         title: "MEMORY BREAKDOWN"
       ],
         id: :memory_breakdown,
-        translate: {padding_x, padding_top + (top_widget_height + row_gap) * 2 + scheduler_height + row_gap}
+        translate: {padding_x, padding_top + (widget_height + row_gap) * 3}
       )
 
     scene
