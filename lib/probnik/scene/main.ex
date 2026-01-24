@@ -25,7 +25,8 @@ defmodule Probnik.Scene.Main do
     widget_width = @screen_width - padding_x * 2
     top_widget_height = 36 + 2 + 60 * 5 + 8
     bottom_total = @screen_height - padding_top - padding_bottom - row_gap * 3 - top_widget_height * 2
-    bottom_widget_height = bottom_total / 2
+    scheduler_height = 250
+    memory_breakdown_height = bottom_total - scheduler_height
 
     graph =
       Graph.build(font: :roboto, font_size: 24)
@@ -53,7 +54,7 @@ defmodule Probnik.Scene.Main do
       # Row 3: Scheduler Pressure
       |> SchedulerPressureWidget.add_to_graph([
         width: widget_width,
-        height: bottom_widget_height,
+        height: scheduler_height,
         title: "SCHEDULER PRESSURE"
       ],
         id: :scheduler_pressure,
@@ -62,11 +63,11 @@ defmodule Probnik.Scene.Main do
       # Row 4: Memory Breakdown
       |> MemoryBreakdownWidget.add_to_graph([
         width: widget_width,
-        height: bottom_widget_height,
+        height: memory_breakdown_height,
         title: "MEMORY BREAKDOWN"
       ],
         id: :memory_breakdown,
-        translate: {padding_x, padding_top + (top_widget_height + row_gap) * 2 + bottom_widget_height + row_gap}
+        translate: {padding_x, padding_top + (top_widget_height + row_gap) * 2 + scheduler_height + row_gap}
       )
 
     scene

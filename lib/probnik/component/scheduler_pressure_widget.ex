@@ -239,28 +239,18 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
   defp draw_tape_gauge(graph, pressure, config, c) do
     # Horizontal VU-style meter with needle
-    height = trunc(config.height * 0.4)
+    height = trunc(config.height * 0.5)
     x = 20
-    y = @header_height + 12
+    padding = 4
+    y = max(@header_height + @info_height, config.height - height - padding)
     width = config.width - 40
-    ticks = 10
     ratio = min(max(pressure, 0.0), 1.0)
     needle_x = x + width * ratio
     fill_w = width * ratio
 
     graph
     |> draw_pressure_fill(x, y, width, height, ratio)
-    |> draw_ticks(x, y, width, height, ticks, c)
     |> line({{needle_x, y - 6}, {needle_x, y + height + 6}}, stroke: {3, c.needle})
-  end
-
-  defp draw_ticks(graph, x, y, width, height, ticks, c) do
-    Enum.reduce(0..ticks, graph, fn i, g ->
-      tx = x + width * (i / ticks)
-      tlen = if rem(i, 5) == 0, do: 10, else: 6
-      g
-      |> line({{tx, y + height + 2}, {tx, y + height + 2 + tlen}}, stroke: {2, c.secondary})
-    end)
   end
 
   defp draw_pressure_fill(graph, x, y, width, height, ratio) do
