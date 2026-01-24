@@ -197,8 +197,7 @@ defmodule Probnik.Component.Top5Widget do
     cond do
       bytes < 1024 -> "#{bytes} B"
       bytes < 1024 * 1024 -> "#{Float.round(bytes / 1024, 1)} KB"
-      bytes < 1024 * 1024 * 1024 -> "#{Float.round(bytes / 1024 / 1024, 1)} MB"
-      true -> "#{Float.round(bytes / 1024 / 1024 / 1024, 2)} GB"
+      true -> "#{Float.round(bytes / 1024 / 1024, 1)} MB"
     end
   end
 

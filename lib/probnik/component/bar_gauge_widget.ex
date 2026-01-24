@@ -99,18 +99,16 @@ defmodule Probnik.Component.BarGaugeWidget do
 
   defp extract_process_info(pid, value, info, real_initial_call) do
     reg_name = extract_registered_name(info)
-    {proc_type, module_fn} = extract_type_and_module(info, real_initial_call)
+    {proc_type, module_fn} = extract_type_and_module(pid, info, real_initial_call)
 
-    # Display name: prefer registered name, fallback to module.function
-    display_name = if reg_name, do: reg_name, else: module_fn
-
+    # Always display Module.Function/Arity
     %{
       pid: pid,
       value: value,
       type: proc_type,
       registered_name: reg_name,
       module_fn: module_fn,
-      name: display_name
+      name: module_fn
     }
   end
 
@@ -131,48 +129,82 @@ defmodule Probnik.Component.BarGaugeWidget do
     _ -> nil
   end
 
-  defp extract_type_and_module(info, real_initial_call) do
-    initial_call = if is_tuple(real_initial_call) and tuple_size(real_initial_call) == 3 do
-      real_initial_call
-    else
-      Keyword.get(info, :initial_call)
-    end
+  defp extract_type_and_module(pid, info, real_initial_call) do
+    # Try multiple sources for the best name
+    # 1. real_initial_call from proc_lib
+    # 2. initial_call from info
+    # 3. current_function from info
+    # 4. registered_name
+    # 5. PID as last resort
 
-    case initial_call do
-      {mod, fun, arity} when is_atom(mod) ->
-        mod_str = mod |> Atom.to_string() |> String.replace("Elixir.", "")
-        module_fn = "#{mod_str}.#{fun}/#{arity}"
+    result = try_extract_mfa(real_initial_call) ||
+             try_extract_mfa(Keyword.get(info, :initial_call)) ||
+             try_extract_mfa(Keyword.get(info, :current_function)) ||
+             try_registered_name(info) ||
+             {"PRC", format_pid(pid)}
 
-        proc_type = cond do
-          String.contains?(mod_str, "Supervisor") -> "SUP"
-          String.contains?(mod_str, "GenServer") or fun == :init -> "GEN"
-          String.contains?(mod_str, "GenEvent") -> "GEV"
-          String.contains?(mod_str, "GenStateMachine") -> "GSM"
-          String.contains?(mod_str, "Task") -> "TSK"
-          String.contains?(mod_str, "Agent") -> "AGT"
-          String.contains?(mod_str, "Phoenix") -> "PHX"
-          String.contains?(mod_str, "Plug") -> "PLG"
-          String.contains?(mod_str, "Ecto") -> "ECT"
-          String.contains?(mod_str, "Logger") -> "LOG"
-          String.contains?(mod_str, "Telemetry") -> "TEL"
-          String.contains?(mod_str, "Finch") -> "FIN"
-          String.contains?(mod_str, "Mint") -> "MNT"
-          String.contains?(mod_str, "Bandit") -> "BAN"
-          String.contains?(mod_str, "Registry") -> "REG"
-          String.contains?(mod_str, "DynamicSupervisor") -> "DYN"
-          mod_str == "proc_lib" -> "PRC"
-          mod_str == "gen" -> "GEN"
-          mod_str == "supervisor" -> "SUP"
-          true -> "PRC"
-        end
-
-        {proc_type, module_fn}
-
-      _ ->
-        {"PRC", "-"}
-    end
+    result
   rescue
-    _ -> {"PRC", "-"}
+    _ -> {"PRC", format_pid(pid)}
+  end
+
+  defp try_extract_mfa({mod, fun, arity}) when is_atom(mod) and is_atom(fun) do
+    mod_str = mod |> Atom.to_string() |> String.replace("Elixir.", "")
+
+    # Skip proc_lib and gen internal functions - not useful
+    if mod_str in ["proc_lib", "gen", "gen_server", "supervisor"] and fun in [:init_p, :init_it, :loop, :init_p_do_apply] do
+      nil
+    else
+      module_fn = "#{mod_str}.#{fun}/#{arity}"
+      proc_type = detect_type(mod_str, fun)
+      {proc_type, module_fn}
+    end
+  end
+
+  defp try_extract_mfa(_), do: nil
+
+  defp try_registered_name(info) do
+    case Keyword.get(info, :registered_name) do
+      name when is_atom(name) and name != nil ->
+        name_str = Atom.to_string(name)
+        {"REG", name_str}
+      [name | _] when is_atom(name) ->
+        {"REG", Atom.to_string(name)}
+      _ ->
+        nil
+    end
+  end
+
+  defp format_pid(pid) when is_pid(pid) do
+    pid |> inspect() |> String.replace(~r/[<>]/, "")
+  end
+
+  defp format_pid(_), do: "???"
+
+  defp detect_type(mod_str, fun) do
+    cond do
+      String.contains?(mod_str, "Supervisor") -> "SUP"
+      String.contains?(mod_str, "DynamicSupervisor") -> "DYN"
+      String.contains?(mod_str, "GenServer") or fun == :init -> "GEN"
+      String.contains?(mod_str, "GenEvent") -> "GEV"
+      String.contains?(mod_str, "GenStateMachine") -> "GSM"
+      String.contains?(mod_str, "Task") -> "TSK"
+      String.contains?(mod_str, "Agent") -> "AGT"
+      String.contains?(mod_str, "Phoenix") -> "PHX"
+      String.contains?(mod_str, "Plug") -> "PLG"
+      String.contains?(mod_str, "Ecto") -> "ECT"
+      String.contains?(mod_str, "Logger") -> "LOG"
+      String.contains?(mod_str, "Telemetry") -> "TEL"
+      String.contains?(mod_str, "Finch") -> "FIN"
+      String.contains?(mod_str, "Mint") -> "MNT"
+      String.contains?(mod_str, "Bandit") -> "BAN"
+      String.contains?(mod_str, "Registry") -> "REG"
+      String.contains?(mod_str, "Cowboy") -> "COW"
+      String.contains?(mod_str, "Ranch") -> "RAN"
+      String.contains?(mod_str, "Pool") -> "POL"
+      mod_str == "supervisor" -> "SUP"
+      true -> "PRC"
+    end
   end
 
   # Intelligently shorten name to show rightmost distinct Module.Function/Arity
@@ -227,8 +259,8 @@ defmodule Probnik.Component.BarGaugeWidget do
   end
 
   defp draw_header(graph, config, c) do
-    # Column header for value (GB for memory, count for msgq)
-    value_header = if config.attribute == :memory, do: "GB", else: "Cnt"
+    # Column header for value (MB for memory, count for msgq)
+    value_header = if config.attribute == :memory, do: "MB", else: "Cnt"
 
     # Layout: 5% type, 35% name, 10% value, 50% meter
     type_width = config.width * 0.05
@@ -351,8 +383,8 @@ defmodule Probnik.Component.BarGaugeWidget do
 
   # Format value for display in the value column
   defp format_value_display(bytes, :memory) do
-    gb = bytes / 1024 / 1024 / 1024
-    :erlang.float_to_binary(gb, decimals: 2)
+    mb = bytes / 1024 / 1024
+    :erlang.float_to_binary(mb, decimals: 2)
   end
 
   defp format_value_display(count, :message_queue_len) do
