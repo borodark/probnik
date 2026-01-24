@@ -30,12 +30,13 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     }
 
     data = fetch_data()
-    graph = build_graph(data, config)
+    pressure = pressure_score(data, usage_stats(data.schedulers) |> elem(0))
+    graph = build_graph(data, config, pressure)
 
     Process.send_after(self(), :refresh, @update_interval)
 
     scene
-    |> assign(config: config, data: data)
+    |> assign(config: config, data: data, pressure: pressure)
     |> push_graph(graph)
     |> then(&{:ok, &1})
   end
@@ -45,12 +46,14 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     %{config: config} = scene.assigns
 
     data = fetch_data()
-    graph = build_graph(data, config)
+    raw = pressure_score(data, usage_stats(data.schedulers) |> elem(0))
+    pressure = smooth_pressure(raw, scene.assigns[:pressure])
+    graph = build_graph(data, config, pressure)
 
     Process.send_after(self(), :refresh, @update_interval)
 
     scene
-    |> assign(data: data)
+    |> assign(data: data, pressure: pressure)
     |> push_graph(graph)
     |> then(&{:noreply, &1})
   end
@@ -177,18 +180,18 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     )
   end
 
-  defp build_graph(data, config) do
+  defp build_graph(data, config, pressure) do
     c = ColorScheme.current()
     schedulers = data.schedulers
 
-    {avg_usage, _max_usage} = usage_stats(schedulers)
+    {_avg_usage, _max_usage} = usage_stats(schedulers)
     {avg_rq, max_rq, min_rq} = run_queue_stats(schedulers, data.run_queue_total)
 
     Graph.build(font: :roboto_mono, font_size: 24)
     |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
     |> draw_header(config, c)
-    |> draw_info(data, config, avg_usage, avg_rq, max_rq, min_rq, c)
-    |> draw_rows(schedulers, config, c)
+    |> draw_info(data, config, avg_rq, max_rq, min_rq, pressure, c)
+    |> draw_rows([], config, c)
   end
 
   defp draw_header(graph, config, c) do
@@ -202,7 +205,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
   end
 
-  defp draw_info(graph, data, config, avg_usage, avg_rq, max_rq, min_rq, c) do
+  defp draw_info(graph, data, config, avg_rq, max_rq, min_rq, pressure, c) do
     rq_skew = max_rq - min_rq
 
     graph
@@ -218,23 +221,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
       font_size: 20,
       translate: {20, @header_height + 60}
     )
-    |> draw_gauge(pressure_score(data, avg_usage), config, c)
-  end
-
-  defp draw_gauge(graph, score, config, c) do
-    radius = 48
-    cx = config.width - 70
-    cy = @header_height + 40
-    needle_len = radius - 6
-    angle = :math.pi * (1.0 - score)
-    x2 = cx + :math.cos(angle) * needle_len
-    y2 = cy - :math.sin(angle) * needle_len
-
-    graph
-    |> arc({radius, -:math.pi}, stroke: {5, dim_color(c.primary, 0.25)}, translate: {cx, cy})
-    |> arc({radius, -:math.pi * score}, stroke: {5, c.needle}, translate: {cx, cy})
-    |> line({{cx, cy}, {x2, y2}}, stroke: {3, c.needle})
-    |> circle(4, fill: c.needle, translate: {cx, cy})
+    |> draw_tape_gauge(pressure, config, c)
   end
 
   defp pressure_score(data, avg_usage) do
@@ -242,6 +229,48 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     rq_norm = min(data.run_queue_total / (schedulers * 2), 1.0)
     score = avg_usage * 0.7 + rq_norm * 0.3
     min(max(score, 0.0), 1.0)
+  end
+
+  defp smooth_pressure(raw, nil), do: raw
+  defp smooth_pressure(raw, prev) when is_number(prev) do
+    alpha = 0.25
+    alpha * raw + (1.0 - alpha) * prev
+  end
+
+  defp draw_tape_gauge(graph, pressure, config, c) do
+    # Horizontal VU-style meter with needle
+    height = trunc(config.height * 0.4)
+    x = 20
+    y = @header_height + 12
+    width = config.width - 40
+    ticks = 10
+    ratio = min(max(pressure, 0.0), 1.0)
+    needle_x = x + width * ratio
+    fill_w = width * ratio
+
+    graph
+    |> rect({fill_w, height},
+      fill: pressure_fill_color(ratio),
+      translate: {x, y}
+    )
+    |> draw_ticks(x, y, width, height, ticks, c)
+    |> line({{needle_x, y - 6}, {needle_x, y + height + 6}}, stroke: {3, c.needle})
+  end
+
+  defp draw_ticks(graph, x, y, width, height, ticks, c) do
+    Enum.reduce(0..ticks, graph, fn i, g ->
+      tx = x + width * (i / ticks)
+      tlen = if rem(i, 5) == 0, do: 10, else: 6
+      g
+      |> line({{tx, y + height + 2}, {tx, y + height + 2 + tlen}}, stroke: {2, c.secondary})
+    end)
+  end
+
+  defp pressure_fill_color(ratio) do
+    r = trunc(80 + 120 * ratio)
+    g = trunc(5 * (1.0 - ratio))
+    b = trunc(5 * (1.0 - ratio))
+    {r, g, b}
   end
 
   defp dim_color({r, g, b}, factor) do
@@ -252,51 +281,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     {trunc(r * factor), trunc(g * factor), trunc(b * factor), a}
   end
 
-  defp draw_rows(graph, schedulers, config, _c) do
-    # Vertical stack: one strip per scheduler, sorted by utilization
-    area_y = @header_height + @info_height
-    area_height = config.height - area_y - 10
-    area_x = 20
-    area_width = config.width - 40
-    count = max(length(schedulers), 1)
-    row_height = area_height / count
-
-    schedulers
-    |> Enum.sort_by(& &1.usage, :desc)
-    |> Enum.with_index(0)
-    |> Enum.reduce(graph, fn {sched, idx}, g ->
-      y = area_y + idx * row_height
-      draw_strip(g, sched, area_x, y, area_width, row_height)
-    end)
-  end
-
-  defp draw_strip(graph, sched, x, y, width, height) do
-    usage = sched.usage || 0.0
-    color = pressure_color(usage)
-
-    graph
-    |> rect({width, height},
-      fill: color,
-      translate: {x, y}
-    )
-  end
-
-  defp pressure_color(usage) do
-    clamped = min(max(usage, 0.0), 1.0)
-
-    if clamped <= 0.01 do
-      {0, 0, 0}
-    else
-      ratio = (clamped - 0.01) / 0.99
-      {r1, g1, b1} = {0, 200, 0}
-      {r2, g2, b2} = {120, 0, 0}
-      {
-        trunc(r1 + (r2 - r1) * ratio),
-        trunc(g1 + (g2 - g1) * ratio),
-        trunc(b1 + (b2 - b1) * ratio)
-      }
-    end
-  end
+  defp draw_rows(graph, _schedulers, _config, _c), do: graph
 
   defp usage_stats(schedulers) do
     usages = Enum.map(schedulers, & &1.usage)
