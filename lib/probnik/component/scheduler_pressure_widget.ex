@@ -11,7 +11,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
   @update_interval 2000
   @header_height 60
-  @info_height 70
+  @info_height 0
 
   @impl Scenic.Component
   def validate(opts) when is_list(opts), do: {:ok, opts}
@@ -31,12 +31,12 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
     data = fetch_data()
     pressure = pressure_score(data, usage_stats(data.schedulers) |> elem(0))
-    graph = build_graph(data, config, pressure)
+    graph = build_graph(data, config, pressure, 0.0)
 
     Process.send_after(self(), :refresh, @update_interval)
 
     scene
-    |> assign(config: config, data: data, pressure: pressure)
+    |> assign(config: config, data: data, pressure: pressure, prev_runq: data.run_queue_total, runq_rate: 0.0)
     |> push_graph(graph)
     |> then(&{:ok, &1})
   end
@@ -48,12 +48,13 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     data = fetch_data()
     raw = pressure_score(data, usage_stats(data.schedulers) |> elem(0))
     pressure = smooth_pressure(raw, scene.assigns[:pressure])
-    graph = build_graph(data, config, pressure)
+    runq_rate = smooth_pressure(runq_rate(data, scene.assigns[:prev_runq]), scene.assigns[:runq_rate])
+    graph = build_graph(data, config, pressure, runq_rate)
 
     Process.send_after(self(), :refresh, @update_interval)
 
     scene
-    |> assign(data: data, pressure: pressure)
+    |> assign(data: data, pressure: pressure, prev_runq: data.run_queue_total, runq_rate: runq_rate)
     |> push_graph(graph)
     |> then(&{:noreply, &1})
   end
@@ -167,30 +168,17 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     end)
   end
 
-  defp build_graph(%{schedulers: []} = _data, config) do
-    c = ColorScheme.current()
-
-    Graph.build(font: :roboto_mono, font_size: 22)
-    |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
-    |> text("No data - check node connection",
-      fill: c.warning,
-      font: :roboto_mono,
-      font_size: 28,
-      translate: {20, config.height / 2}
-    )
-  end
-
-  defp build_graph(data, config, pressure) do
+  defp build_graph(data, config, pressure, runq_rate) do
     c = ColorScheme.current()
     schedulers = data.schedulers
 
-    {_avg_usage, _max_usage} = usage_stats(schedulers)
+    {avg_usage, _max_usage} = usage_stats(schedulers)
     {avg_rq, max_rq, min_rq} = run_queue_stats(schedulers, data.run_queue_total)
 
-    Graph.build(font: :roboto_mono, font_size: 24)
+    Graph.build(font: :courier, font_size: 24)
     |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
     |> draw_header(config, c)
-    |> draw_info(data, config, avg_rq, max_rq, min_rq, pressure, c)
+    |> draw_info(data, config, avg_usage, avg_rq, max_rq, min_rq, pressure, runq_rate, c)
     |> draw_rows([], config, c)
   end
 
@@ -198,30 +186,18 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     graph
     |> text(config.title,
       fill: c.primary,
-      font: :roboto_mono,
+      font: :courier,
       font_size: 32,
       translate: {20, 50}
     )
     |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
   end
 
-  defp draw_info(graph, data, config, avg_rq, max_rq, min_rq, pressure, c) do
+  defp draw_info(graph, data, config, avg_usage, avg_rq, max_rq, min_rq, pressure, runq_rate, c) do
     rq_skew = max_rq - min_rq
 
     graph
-    |> text("RunQ total: #{data.run_queue_total}",
-      fill: c.secondary,
-      font: :roboto_mono,
-      font_size: 20,
-      translate: {20, @header_height + 35}
-    )
-    |> text("RunQ avg: #{format_float(avg_rq, 1)}  skew: #{rq_skew}",
-      fill: c.secondary,
-      font: :roboto_mono,
-      font_size: 20,
-      translate: {20, @header_height + 60}
-    )
-    |> draw_tape_gauge(pressure, config, c)
+    |> draw_tape_gauge(data, avg_usage, avg_rq, rq_skew, pressure, runq_rate, config, c)
   end
 
   defp pressure_score(data, avg_usage) do
@@ -231,25 +207,57 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     min(max(score, 0.0), 1.0)
   end
 
+  defp runq_rate(data, prev_runq) when is_integer(prev_runq) do
+    interval_s = @update_interval / 1000
+    (data.run_queue_total - prev_runq) / interval_s
+  end
+
+  defp runq_rate(_data, _prev), do: 0.0
+
   defp smooth_pressure(raw, nil), do: raw
   defp smooth_pressure(raw, prev) when is_number(prev) do
     alpha = 0.25
     alpha * raw + (1.0 - alpha) * prev
   end
 
-  defp draw_tape_gauge(graph, pressure, config, c) do
+  defp draw_tape_gauge(graph, data, avg_usage, avg_rq, rq_skew, pressure, runq_rate, config, c) do
     # Horizontal VU-style meter with needle
-    height = trunc(config.height * 0.5)
     x = 20
-    padding = 4
-    y = max(@header_height + @info_height, config.height - height - padding)
+    y = @header_height + 6
+    height = config.height - y - 6
     width = config.width - 40
     ratio = min(max(pressure, 0.0), 1.0)
     needle_x = x + width * ratio
-    fill_w = width * ratio
+    rq_ratio = min(data.run_queue_total / max(data.schedulers_online, 1) / 4, 1.0)
+    usage_ratio = min(max(avg_usage, 0.0), 1.0)
 
     graph
     |> draw_pressure_fill(x, y, width, height, ratio)
+    |> draw_vsi_texts(x + 10, y, 140, height, runq_rate, c)
+    |> text("RunQ #{data.run_queue_total}",
+      fill: pressure_text_color(rq_ratio, c),
+      font: :courier,
+      font_size: 26,
+      translate: {x + 12, y + 34}
+    )
+    |> text("avg #{format_float(avg_rq, 1)}",
+      fill: pressure_text_color(rq_ratio, c),
+      font: :courier,
+      font_size: 22,
+      translate: {x + 12, y + 62}
+    )
+    |> text("skew #{rq_skew}",
+      fill: pressure_text_color(rq_ratio, c),
+      font: :courier,
+      font_size: 22,
+      translate: {x + 12, y + 88}
+    )
+    |> text("util #{pct(usage_ratio)}",
+      fill: pressure_text_color(rq_ratio, c),
+      font: :courier,
+      font_size: 22,
+      translate: {x + 12, y + 114}
+    )
     |> line({{needle_x, y - 6}, {needle_x, y + height + 6}}, stroke: {3, c.needle})
   end
 
@@ -289,6 +297,31 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     graph
   end
 
+  defp draw_vsi_texts(graph, x, y, width, height, rate, c) do
+    half = height / 2
+    font_size = trunc(half * 0.7)
+    pos_color = if rate > 0, do: c.critical, else: c.secondary
+    neg_color = if rate < 0, do: c.negative, else: c.secondary
+    pos_val = if rate > 0, do: "+#{round(rate)}", else: "+0"
+    neg_val = if rate < 0, do: "-#{round(abs(rate))}", else: "-0"
+
+    graph
+    |> text(pos_val,
+      fill: pos_color,
+      font: :courier_bold,
+      font_size: font_size,
+      text_align: :center,
+      translate: {x + width / 2, y + half / 2 + font_size / 3}
+    )
+    |> text(neg_val,
+      fill: neg_color,
+      font: :courier_bold,
+      font_size: font_size,
+      text_align: :center,
+      translate: {x + width / 2, y + half + half / 2 + font_size / 3}
+    )
+  end
+
   defp lerp_color({r1, g1, b1}, {r2, g2, b2}, t) do
     {
       trunc(r1 + (r2 - r1) * t),
@@ -297,13 +330,37 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     }
   end
 
-  defp dim_color({r, g, b}, factor) do
-    {trunc(r * factor), trunc(g * factor), trunc(b * factor)}
+  defp pressure_text_color(ratio, c) do
+    base = pressure_fill_color(ratio)
+    lerp_color(base, c.accent, 0.35)
   end
 
-  defp dim_color({r, g, b, a}, factor) do
-    {trunc(r * factor), trunc(g * factor), trunc(b * factor), a}
+  defp pressure_fill_color(ratio) do
+    t = min(max(ratio, 0.0), 1.0)
+
+    cond do
+      t <= 0.25 ->
+        # black -> green
+        k = t / 0.25
+        {0, trunc(180 * k), 0}
+
+      t <= 0.6 ->
+        # green -> yellow
+        k = (t - 0.25) / 0.35
+        {trunc(255 * k), 180, 0}
+
+      t <= 0.85 ->
+        # yellow -> orange
+        k = (t - 0.6) / 0.25
+        {255, trunc(180 - 80 * k), 0}
+
+      true ->
+        # orange -> dark red
+        k = (t - 0.85) / 0.15
+        {trunc(255 - 120 * k), 0, 0}
+    end
   end
+
 
   defp draw_rows(graph, _schedulers, _config, _c), do: graph
 

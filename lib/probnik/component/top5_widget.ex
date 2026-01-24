@@ -116,7 +116,7 @@ defmodule Probnik.Component.Top5Widget do
   defp build_graph(procs, config) do
     c = ColorScheme.current()
 
-    Graph.build(font: :roboto, font_size: 36)
+    Graph.build(font: :courier, font_size: 36)
     |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
     |> draw_header(config, c)
     |> draw_rows(procs, config, c)

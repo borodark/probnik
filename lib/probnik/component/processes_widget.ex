@@ -114,7 +114,7 @@ defmodule Probnik.Component.ProcessesWidget do
   defp build_graph(processes, config) do
     c = ColorScheme.current()
 
-    Graph.build(font: :roboto_mono, font_size: 18)
+    Graph.build(font: :courier, font_size: 18)
     |> rect({config.width, config.height}, fill: c.bg)
     |> draw_header(c)
     |> draw_processes(processes, c, config)

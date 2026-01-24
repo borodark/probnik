@@ -252,7 +252,7 @@ defmodule Probnik.Component.BarGaugeWidget do
     # Find max value for scaling bars
     max_val = procs |> Enum.map(& &1.value) |> Enum.max(fn -> 1 end)
 
-    Graph.build(font: :roboto_mono, font_size: 30)
+    Graph.build(font: :courier, font_size: 30)
     |> rect({config.width, config.height}, fill: c.bg, stroke: {3, c.border})
     |> draw_header(config, c)
     |> draw_rows(procs, max_val, config, c)
@@ -270,13 +270,13 @@ defmodule Probnik.Component.BarGaugeWidget do
     graph
     |> text(config.title,
       fill: c.primary,
-      font: :roboto_mono,
+      font: :courier,
       font_size: 26,
       translate: {type_width + 5, 28}
     )
     |> text(value_header,
       fill: c.secondary,
-      font: :roboto_mono,
+      font: :courier,
       font_size: 17,
       text_align: :right,
       translate: {value_x - 10, 28}
@@ -289,7 +289,7 @@ defmodule Probnik.Component.BarGaugeWidget do
     graph
     |> text("No data - check node connection",
       fill: c.warning,
-      font: :roboto_mono,
+      font: :courier,
       font_size: 26,
       translate: {config.width / 2 - 250, config.height / 2}
     )
@@ -342,21 +342,21 @@ defmodule Probnik.Component.BarGaugeWidget do
     # Type - 5% left
     |> text(type_str,
       fill: type_color,
-      font: :roboto_mono,
+      font: :courier,
       font_size: 17,
       translate: {8, y + row_inner_height / 2 + 6}
     )
     # Name - after type
     |> text(name_str,
       fill: c.primary,
-      font: :roboto_mono,
+      font: :courier,
       font_size: 20,
       translate: {type_width + 5, y + row_inner_height / 2 + 7}
     )
     # Value - in the 10% area before meter
     |> text(value_str,
       fill: c.primary,
-      font: :roboto_mono,
+      font: :courier,
       font_size: 17,
       text_align: :right,
       translate: {meter_x - 10, y + row_inner_height / 2 + 6}

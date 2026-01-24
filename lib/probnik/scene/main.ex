@@ -29,7 +29,7 @@ defmodule Probnik.Scene.Main do
     memory_breakdown_height = bottom_total - scheduler_height
 
     graph =
-      Graph.build(font: :roboto, font_size: 24)
+      Graph.build(font: :courier, font_size: 24)
       |> rect({@screen_width, @screen_height}, fill: c.bg)
       # Row 1: Memory Top 5
       |> BarGaugeWidget.add_to_graph([

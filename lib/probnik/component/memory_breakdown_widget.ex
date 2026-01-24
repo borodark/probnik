@@ -97,11 +97,11 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
   defp build_graph(%{rows: []} = _data, config) do
     c = ColorScheme.current()
 
-    Graph.build(font: :roboto_mono, font_size: 22)
+    Graph.build(font: :courier, font_size: 22)
     |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
     |> text("No data - check node connection",
       fill: c.warning,
-      font: :roboto_mono,
+      font: :courier,
       font_size: 28,
       translate: {20, config.height / 2}
     )
@@ -110,7 +110,7 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
   defp build_graph(data, config) do
     c = ColorScheme.current()
 
-    Graph.build(font: :roboto_mono, font_size: 24)
+    Graph.build(font: :courier, font_size: 24)
     |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
     |> draw_header(config, c)
     |> draw_total(data.total, c)
@@ -121,7 +121,7 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
     graph
     |> text(config.title,
       fill: c.primary,
-      font: :roboto_mono,
+      font: :courier,
       font_size: 32,
       translate: {20, 50}
     )
@@ -132,7 +132,7 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
     graph
     |> text("Total: #{format_mb(total)}",
       fill: c.secondary,
-      font: :roboto_mono,
+      font: :courier,
       font_size: 22,
       translate: {20, @header_height + 35}
     )
@@ -154,13 +154,13 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
       g
       |> text(row.label,
         fill: c.primary,
-        font: :roboto_mono,
+        font: :courier,
       font_size: 20,
         translate: {20, y + 35}
       )
       |> text(format_mb(row.value),
         fill: c.secondary,
-        font: :roboto_mono,
+        font: :courier,
       font_size: 20,
         text_align: :right,
         translate: {bar_x - 10, y + 35}
@@ -175,7 +175,7 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
       )
       |> text(pct(ratio),
         fill: c.bg,
-        font: :roboto_mono,
+        font: :courier,
         font_size: 18,
         translate: {bar_x + 8, y + 32}
       )
