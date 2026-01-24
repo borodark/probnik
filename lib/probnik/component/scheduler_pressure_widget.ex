@@ -188,7 +188,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
     |> draw_header(config, c)
     |> draw_info(data, config, avg_usage, max_usage, avg_rq, max_rq, min_rq, c)
-    |> draw_rows(schedulers, config, c)
+    |> draw_rows(schedulers, avg_usage, max_usage, config, c)
   end
 
   defp draw_header(graph, config, c) do
@@ -228,22 +228,36 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     )
   end
 
-  defp draw_rows(graph, schedulers, config, c) do
+  defp draw_rows(graph, schedulers, avg_usage, max_usage, config, c) do
     # Vertical bar chart: one bar per scheduler
     area_y = @header_height + @info_height
     area_height = config.height - area_y - 10
     area_x = 20
     area_width = config.width - 40
     count = max(length(schedulers), 1)
-    gap = 6
+    gap = 0
     bar_width = max((area_width - gap * (count - 1)) / count, 6)
+    overlap = 1
+    graph =
+      graph
+      |> draw_tick(area_x, area_width, area_y, area_height, avg_usage, c.secondary)
+      |> draw_tick(area_x, area_width, area_y, area_height, max_usage, c.critical)
 
     schedulers
+    |> Enum.sort_by(& &1.usage, :desc)
     |> Enum.with_index(0)
     |> Enum.reduce(graph, fn {sched, idx}, g ->
-      x = area_x + idx * (bar_width + gap)
-      draw_bar(g, sched, x, area_y, bar_width, area_height, c)
+      x = area_x + idx * (bar_width + gap) - min(idx, overlap)
+      draw_bar(g, sched, x, area_y, bar_width + overlap, area_height, c)
     end)
+  end
+
+  defp draw_tick(graph, x, width, y, height, usage, color) do
+    ratio = min(max(usage, 0.0), 1.0)
+    y_pos = y + height - height * ratio
+
+    graph
+    |> line({{x, y_pos}, {x + width, y_pos}}, stroke: {2, color})
   end
 
   defp draw_bar(graph, sched, x, y, bar_width, area_height, c) do
@@ -261,34 +275,9 @@ defmodule Probnik.Component.SchedulerPressureWidget do
       end
 
     graph
-    |> rrect({bar_width, area_height, 3},
-      fill: dim_color(c.primary, 0.15),
-      translate: {x, y}
-    )
-    |> rrect({bar_width, fill_h, 3},
+    |> rect({bar_width, fill_h},
       fill: bar_color,
       translate: {x, y + (area_height - fill_h)}
-    )
-    |> text("S#{sched.id}",
-      fill: c.primary,
-      font: :roboto_mono,
-      font_size: 16,
-      text_align: :center,
-      translate: {x + bar_width / 2, y + area_height + 18}
-    )
-    |> text(pct(usage),
-      fill: c.bg,
-      font: :roboto_mono,
-      font_size: 16,
-      text_align: :center,
-      translate: {x + bar_width / 2, y + area_height - fill_h + 16}
-    )
-    |> text("rq #{rq}",
-      fill: c.secondary,
-      font: :roboto_mono,
-      font_size: 14,
-      text_align: :center,
-      translate: {x + bar_width / 2, y + area_height + 36}
     )
   end
 
