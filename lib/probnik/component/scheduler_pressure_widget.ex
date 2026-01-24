@@ -11,7 +11,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
   @update_interval 2000
   @header_height 60
-  @info_height 50
+  @info_height 70
 
   @impl Scenic.Component
   def validate(opts) when is_list(opts), do: {:ok, opts}
@@ -181,13 +181,13 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     c = ColorScheme.current()
     schedulers = data.schedulers
 
-    {avg_usage, max_usage} = usage_stats(schedulers)
+    {avg_usage, _max_usage} = usage_stats(schedulers)
     {avg_rq, max_rq, min_rq} = run_queue_stats(schedulers, data.run_queue_total)
 
     Graph.build(font: :roboto_mono, font_size: 24)
     |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
     |> draw_header(config, c)
-    |> draw_info(data, config, avg_usage, max_usage, avg_rq, max_rq, min_rq, c)
+    |> draw_info(data, config, avg_usage, avg_rq, max_rq, min_rq, c)
     |> draw_rows(schedulers, config, c)
   end
 
@@ -202,10 +202,8 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
   end
 
-  defp draw_info(graph, data, config, avg_usage, max_usage, avg_rq, max_rq, min_rq, c) do
+  defp draw_info(graph, data, config, avg_usage, avg_rq, max_rq, min_rq, c) do
     rq_skew = max_rq - min_rq
-    avg_str = pct(avg_usage)
-    max_str = pct(max_usage)
 
     graph
     |> text("RunQ total: #{data.run_queue_total}",
@@ -220,12 +218,38 @@ defmodule Probnik.Component.SchedulerPressureWidget do
       font_size: 20,
       translate: {20, @header_height + 60}
     )
-    |> text("Util avg: #{avg_str}  max: #{max_str}",
-      fill: c.secondary,
-      font: :roboto_mono,
-      font_size: 20,
-      translate: {config.width / 2 + 10, @header_height + 35}
-    )
+    |> draw_gauge(pressure_score(data, avg_usage), config, c)
+  end
+
+  defp draw_gauge(graph, score, config, c) do
+    radius = 48
+    cx = config.width - 70
+    cy = @header_height + 40
+    needle_len = radius - 6
+    angle = :math.pi * (1.0 - score)
+    x2 = cx + :math.cos(angle) * needle_len
+    y2 = cy - :math.sin(angle) * needle_len
+
+    graph
+    |> arc({radius, -:math.pi}, stroke: {5, dim_color(c.primary, 0.25)}, translate: {cx, cy})
+    |> arc({radius, -:math.pi * score}, stroke: {5, c.needle}, translate: {cx, cy})
+    |> line({{cx, cy}, {x2, y2}}, stroke: {3, c.needle})
+    |> circle(4, fill: c.needle, translate: {cx, cy})
+  end
+
+  defp pressure_score(data, avg_usage) do
+    schedulers = max(data.schedulers_online || length(data.schedulers), 1)
+    rq_norm = min(data.run_queue_total / (schedulers * 2), 1.0)
+    score = avg_usage * 0.7 + rq_norm * 0.3
+    min(max(score, 0.0), 1.0)
+  end
+
+  defp dim_color({r, g, b}, factor) do
+    {trunc(r * factor), trunc(g * factor), trunc(b * factor)}
+  end
+
+  defp dim_color({r, g, b, a}, factor) do
+    {trunc(r * factor), trunc(g * factor), trunc(b * factor), a}
   end
 
   defp draw_rows(graph, schedulers, config, _c) do
