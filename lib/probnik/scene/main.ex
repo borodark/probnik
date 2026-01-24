@@ -34,7 +34,7 @@ defmodule Probnik.Scene.Main do
         width: widget_width,
         height: widget_height,
         attribute: :memory,
-        title: "MEMORY TOP 5"
+        title: "Memory Top 5"
       ],
         id: :memory_top5,
         translate: {padding_x, padding_top}
@@ -44,7 +44,7 @@ defmodule Probnik.Scene.Main do
         width: widget_width,
         height: widget_height,
         attribute: :message_queue_len,
-        title: "MESSAGE QUEUE TOP 5"
+        title: "Message Queue Top 5"
       ],
         id: :msgq_top5,
         translate: {padding_x, padding_top + widget_height + row_gap}
@@ -53,7 +53,7 @@ defmodule Probnik.Scene.Main do
       |> SchedulerPressureWidget.add_to_graph([
         width: widget_width,
         height: widget_height,
-        title: "SCHEDULER PRESSURE"
+        title: "Scheduler Pressure"
       ],
         id: :scheduler_pressure,
         translate: {padding_x, padding_top + (widget_height + row_gap) * 2}
@@ -62,7 +62,7 @@ defmodule Probnik.Scene.Main do
       |> MemoryBreakdownWidget.add_to_graph([
         width: widget_width,
         height: widget_height,
-        title: "MEMORY BREAKDOWN"
+        title: "Memory Breakdown"
       ],
         id: :memory_breakdown,
         translate: {padding_x, padding_top + (widget_height + row_gap) * 3}

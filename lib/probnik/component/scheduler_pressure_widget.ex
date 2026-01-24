@@ -404,19 +404,41 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     t = min(abs(rate) / @vsi_max_rate, 1.0)
     up_color = if rate > 0, do: warm_glow(t), else: c.tick
     down_color = if rate < 0, do: warm_glow(t), else: c.tick
-    alpha = if t < 0.05, do: 40, else: trunc(40 + t * 215)
+    base_alpha = if t < 0.05, do: 40, else: trunc(40 + t * 215)
+    phase = rem(now_ms(), 1200) / 1200
 
-    # Outer chevrons (at 12 and 6 o'clock)
+    up_chevrons = [
+      {cy - radius + 38, 5},
+      {cy - radius + 24, 6},
+      {cy - radius + 10, 7},
+      {cy - radius - 6, 8}
+    ]
+
+    down_chevrons = [
+      {cy + radius - 38, 5},
+      {cy + radius - 24, 6},
+      {cy + radius - 10, 7},
+      {cy + radius + 6, 8}
+    ]
+
     graph
-    |> draw_chevron(cx, cy - radius - 6, 8, :up, with_alpha(up_color, alpha))
-    |> draw_chevron(cx, cy + radius + 6, 8, :down, with_alpha(down_color, alpha))
-    # Inner chevrons (3 steps toward center, shrinking toward center)
-    |> draw_chevron(cx, cy - radius + 10, 7, :up, with_alpha(up_color, alpha))
-    |> draw_chevron(cx, cy - radius + 24, 6, :up, with_alpha(up_color, alpha))
-    |> draw_chevron(cx, cy - radius + 38, 5, :up, with_alpha(up_color, alpha))
-    |> draw_chevron(cx, cy + radius - 10, 7, :down, with_alpha(down_color, alpha))
-    |> draw_chevron(cx, cy + radius - 24, 6, :down, with_alpha(down_color, alpha))
-    |> draw_chevron(cx, cy + radius - 38, 5, :down, with_alpha(down_color, alpha))
+    |> draw_animated_chevrons(cx, up_chevrons, :up, rate, up_color, base_alpha, phase)
+    |> draw_animated_chevrons(cx, down_chevrons, :down, rate, down_color, base_alpha, phase)
+  end
+
+  defp draw_animated_chevrons(graph, cx, chevrons, dir, rate, color, base_alpha, phase) do
+    count = length(chevrons)
+
+    Enum.with_index(chevrons, 0)
+    |> Enum.reduce(graph, fn {{cy, size}, idx}, g ->
+      target = idx / max(count - 1, 1)
+      wave = max(0.0, 1.0 - abs(phase - target) / 0.25)
+      active = (dir == :up and rate > 0) or (dir == :down and rate < 0)
+      alpha = if active, do: trunc(base_alpha * wave), else: base_alpha
+
+      g
+      |> draw_chevron(cx, cy, size, dir, with_alpha(color, alpha))
+    end)
   end
 
   defp with_alpha({r, g, b}, a), do: {r, g, b, a}

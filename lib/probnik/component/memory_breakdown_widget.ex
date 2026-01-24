@@ -113,7 +113,8 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
     Graph.build(font: :courier, font_size: 24)
     |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
     |> draw_header(config, c)
-    |> draw_category_bars(data.rows, data.total, config, c)
+    #|> draw_category_bars(data.rows, data.total, config, c)
+    |> draw_sorted_bars(data.rows, data.total, config, c)
   end
 
   defp draw_header(graph, config, c) do
@@ -168,6 +169,57 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
         translate: {x + bar_width / 2, y - 8}
       )
     end)
+  end
+
+  defp draw_sorted_bars(graph, rows, total, config, c) do
+    # Sorted horizontal bars: biggest on the left, smallest on the right
+    sorted = Enum.sort_by(rows, & &1.value, :desc)
+    start_y = @header_height + 80
+    label_x = 20
+    bar_x = 220
+    bar_width = config.width - bar_x - 30
+
+    sorted
+    |> Enum.with_index(0)
+    |> Enum.reduce(graph, fn {row, idx}, g ->
+      y = start_y + idx * @row_height
+      ratio = if total > 0, do: row.value / total, else: 0.0
+      fill_w = bar_width * ratio
+      color = rank_color(idx, c)
+
+      g
+      |> text(row.label,
+        fill: c.primary,
+        font: :courier,
+        font_size: 20,
+        translate: {label_x, y + 35}
+      )
+      |> rect({bar_width, 20},
+        fill: dim_color(c.primary, 0.12),
+        translate: {bar_x, y + 18}
+      )
+      |> rect({fill_w, 20},
+        fill: color,
+        translate: {bar_x, y + 18}
+      )
+      |> text(format_mb(row.value),
+        fill: c.secondary,
+        font: :courier,
+        font_size: 18,
+        text_align: :right,
+        translate: {bar_x + bar_width, y + 35}
+      )
+    end)
+  end
+
+  defp rank_color(idx, c) do
+    case idx do
+      0 -> c.critical
+      1 -> {255, 180, 0}
+      2 -> {200, 170, 0}
+      3 -> {255, 210, 0}
+      _ -> {255, 120, 0}
+    end
   end
 
   defp row_color(key, c) do
