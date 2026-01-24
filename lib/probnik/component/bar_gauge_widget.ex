@@ -11,8 +11,8 @@ defmodule Probnik.Component.BarGaugeWidget do
   import Scenic.Primitives
 
   @update_interval 1000
-  @row_height 100
-  @header_height 70
+  @row_height 60
+  @header_height 36
   @bar_segments 30  # 3x more segments, skinnier marks
 
   @impl Scenic.Component
@@ -252,7 +252,7 @@ defmodule Probnik.Component.BarGaugeWidget do
     # Find max value for scaling bars
     max_val = procs |> Enum.map(& &1.value) |> Enum.max(fn -> 1 end)
 
-    Graph.build(font: :roboto_mono, font_size: 36)
+    Graph.build(font: :roboto_mono, font_size: 30)
     |> rect({config.width, config.height}, fill: c.bg, stroke: {3, c.border})
     |> draw_header(config, c)
     |> draw_rows(procs, max_val, config, c)
@@ -271,15 +271,15 @@ defmodule Probnik.Component.BarGaugeWidget do
     |> text(config.title,
       fill: c.primary,
       font: :roboto_mono,
-      font_size: 42,
-      translate: {type_width + 5, 50}
+      font_size: 26,
+      translate: {type_width + 5, 28}
     )
     |> text(value_header,
       fill: c.secondary,
       font: :roboto_mono,
-      font_size: 28,
+      font_size: 17,
       text_align: :right,
-      translate: {value_x - 10, 50}
+      translate: {value_x - 10, 28}
     )
     |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
   end
@@ -290,7 +290,7 @@ defmodule Probnik.Component.BarGaugeWidget do
     |> text("No data - check node connection",
       fill: c.warning,
       font: :roboto_mono,
-      font_size: 36,
+      font_size: 26,
       translate: {config.width / 2 - 250, config.height / 2}
     )
   end
@@ -304,8 +304,9 @@ defmodule Probnik.Component.BarGaugeWidget do
   end
 
   defp draw_row(graph, proc, idx, max_val, config, c) do
-    y = @header_height + 8 + (idx - 1) * @row_height
-    row_inner_height = @row_height - 12
+    y = @header_height + 2 + (idx - 1) * @row_height
+    row_inner_height = @row_height - 8
+    bar_height = max(row_inner_height - 20, 12)
 
     # Layout: 5% type, 35% name, 10% value, 50% meter
     type_width = config.width * 0.05
@@ -342,26 +343,35 @@ defmodule Probnik.Component.BarGaugeWidget do
     |> text(type_str,
       fill: type_color,
       font: :roboto_mono,
-      font_size: 28,
-      translate: {8, y + row_inner_height / 2 + 10}
+      font_size: 17,
+      translate: {8, y + row_inner_height / 2 + 6}
     )
     # Name - after type
     |> text(name_str,
       fill: c.primary,
       font: :roboto_mono,
-      font_size: 36,
-      translate: {type_width + 5, y + row_inner_height / 2 + 12}
+      font_size: 20,
+      translate: {type_width + 5, y + row_inner_height / 2 + 7}
     )
     # Value - in the 10% area before meter
     |> text(value_str,
       fill: c.primary,
       font: :roboto_mono,
-      font_size: 32,
+      font_size: 17,
       text_align: :right,
-      translate: {meter_x - 10, y + row_inner_height / 2 + 10}
+      translate: {meter_x - 10, y + row_inner_height / 2 + 6}
     )
-    # Draw bar segments - full height
-    |> draw_bar_segments(meter_x, y + 4, segment_width, segment_gap, row_inner_height, ratio, bar_colors, c)
+    # Draw bar segments - slimmer to match text height
+    |> draw_bar_segments(
+      meter_x,
+      y + (row_inner_height - bar_height) / 2 + 4,
+      segment_width,
+      segment_gap,
+      bar_height,
+      ratio,
+      bar_colors,
+      c
+    )
   end
 
   defp get_type_color(type, c) do
