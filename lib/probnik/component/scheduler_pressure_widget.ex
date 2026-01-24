@@ -188,7 +188,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
     |> draw_header(config, c)
     |> draw_info(data, config, avg_usage, max_usage, avg_rq, max_rq, min_rq, c)
-    |> draw_rows(schedulers, avg_usage, max_usage, config, c)
+    |> draw_rows(schedulers, config, c)
   end
 
   defp draw_header(graph, config, c) do
@@ -228,57 +228,50 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     )
   end
 
-  defp draw_rows(graph, schedulers, avg_usage, max_usage, config, c) do
-    # Vertical bar chart: one bar per scheduler
+  defp draw_rows(graph, schedulers, config, _c) do
+    # Vertical stack: one strip per scheduler, sorted by utilization
     area_y = @header_height + @info_height
     area_height = config.height - area_y - 10
     area_x = 20
     area_width = config.width - 40
     count = max(length(schedulers), 1)
-    gap = 0
-    bar_width = max((area_width - gap * (count - 1)) / count, 6)
-    overlap = 1
-    graph =
-      graph
-      |> draw_tick(area_x, area_width, area_y, area_height, avg_usage, c.secondary)
-      |> draw_tick(area_x, area_width, area_y, area_height, max_usage, c.critical)
+    row_height = area_height / count
 
     schedulers
     |> Enum.sort_by(& &1.usage, :desc)
     |> Enum.with_index(0)
     |> Enum.reduce(graph, fn {sched, idx}, g ->
-      x = area_x + idx * (bar_width + gap) - min(idx, overlap)
-      draw_bar(g, sched, x, area_y, bar_width + overlap, area_height, c)
+      y = area_y + idx * row_height
+      draw_strip(g, sched, area_x, y, area_width, row_height)
     end)
   end
 
-  defp draw_tick(graph, x, width, y, height, usage, color) do
-    ratio = min(max(usage, 0.0), 1.0)
-    y_pos = y + height - height * ratio
+  defp draw_strip(graph, sched, x, y, width, height) do
+    usage = sched.usage || 0.0
+    color = pressure_color(usage)
 
     graph
-    |> line({{x, y_pos}, {x + width, y_pos}}, stroke: {2, color})
+    |> rect({width, height},
+      fill: color,
+      translate: {x, y}
+    )
   end
 
-  defp draw_bar(graph, sched, x, y, bar_width, area_height, c) do
-    usage = sched.usage || 0.0
-    usage_ratio = min(usage, 1.0)
-    fill_h = area_height * usage_ratio
-    rq = sched.run_queue || 0
+  defp pressure_color(usage) do
+    clamped = min(max(usage, 0.0), 1.0)
 
-    bar_color =
-      cond do
-        usage >= 1.0 -> c.critical
-        usage >= 0.8 -> c.warning
-        usage >= 0.5 -> c.accent
-        true -> c.secondary
-      end
-
-    graph
-    |> rect({bar_width, fill_h},
-      fill: bar_color,
-      translate: {x, y + (area_height - fill_h)}
-    )
+    if clamped <= 0.01 do
+      {0, 0, 0}
+    else
+      ratio = (clamped - 0.01) / 0.99
+      {r1, g1, b1} = {0, 200, 0}
+      {r2, g2, b2} = {120, 0, 0}
+      {
+        trunc(r1 + (r2 - r1) * ratio),
+        trunc(g1 + (g2 - g1) * ratio),
+        trunc(b1 + (b2 - b1) * ratio)
+      }
+    end
   end
 
   defp usage_stats(schedulers) do
@@ -313,11 +306,4 @@ defmodule Probnik.Component.SchedulerPressureWidget do
   defp format_float(val, _decimals) when is_integer(val), do: Integer.to_string(val)
   defp format_float(_, _), do: "0"
 
-  defp dim_color({r, g, b}, factor) do
-    {trunc(r * factor), trunc(g * factor), trunc(b * factor)}
-  end
-
-  defp dim_color({r, g, b, a}, factor) do
-    {trunc(r * factor), trunc(g * factor), trunc(b * factor), a}
-  end
 end
