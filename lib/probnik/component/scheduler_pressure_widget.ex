@@ -35,12 +35,20 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
     data = fetch_data()
     pressure = pressure_score(data, usage_stats(data.schedulers) |> elem(0))
-    graph = build_graph(data, config, pressure, 0.0)
+    graph = build_graph(data, config, pressure, 0.0, 0.0)
 
     Process.send_after(self(), :refresh, @update_interval)
 
     scene
-    |> assign(config: config, data: data, pressure: pressure, prev_runq: data.run_queue_total, runq_rate: 0.0)
+    |> assign(
+      config: config,
+      data: data,
+      pressure: pressure,
+      prev_runq: data.run_queue_total,
+      runq_rate: 0.0,
+      runq_sign: 0,
+      glow_until: 0
+    )
     |> push_graph(graph)
     |> then(&{:ok, &1})
   end
@@ -52,13 +60,32 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     data = fetch_data()
     raw = pressure_score(data, usage_stats(data.schedulers) |> elem(0))
     pressure = smooth_pressure(raw, scene.assigns[:pressure])
-    runq_rate = smooth_pressure(runq_rate(data, scene.assigns[:prev_runq]), scene.assigns[:runq_rate])
-    graph = build_graph(data, config, pressure, runq_rate)
+    rate_raw = runq_rate(data, scene.assigns[:prev_runq])
+    runq_rate = smooth_pressure(rate_raw, scene.assigns[:runq_rate])
+    sign = sign_of(rate_raw)
+    prev_sign = scene.assigns[:runq_sign] || 0
+    now_ms = now_ms()
+    glow_until =
+      if prev_sign != 0 and sign != 0 and prev_sign != sign do
+        now_ms + 1400
+      else
+        scene.assigns[:glow_until] || 0
+      end
+
+    glow_intensity = glow_intensity(now_ms, glow_until)
+    graph = build_graph(data, config, pressure, runq_rate, glow_intensity)
 
     Process.send_after(self(), :refresh, @update_interval)
 
     scene
-    |> assign(data: data, pressure: pressure, prev_runq: data.run_queue_total, runq_rate: runq_rate)
+    |> assign(
+      data: data,
+      pressure: pressure,
+      prev_runq: data.run_queue_total,
+      runq_rate: runq_rate,
+      runq_sign: sign,
+      glow_until: glow_until
+    )
     |> push_graph(graph)
     |> then(&{:noreply, &1})
   end
@@ -172,7 +199,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     end)
   end
 
-  defp build_graph(data, config, pressure, runq_rate) do
+  defp build_graph(data, config, pressure, runq_rate, glow_intensity) do
     c = ColorScheme.current()
     schedulers = data.schedulers
 
@@ -182,7 +209,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     Graph.build(font: :courier, font_size: 24)
     |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
     |> draw_header(config, c)
-    |> draw_info(data, config, avg_usage, avg_rq, max_rq, min_rq, pressure, runq_rate, c)
+    |> draw_info(data, config, avg_usage, avg_rq, max_rq, min_rq, pressure, runq_rate, glow_intensity, c)
     |> draw_rows([], config, c)
   end
 
@@ -197,11 +224,11 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
   end
 
-  defp draw_info(graph, data, config, avg_usage, avg_rq, max_rq, min_rq, pressure, runq_rate, c) do
+  defp draw_info(graph, data, config, avg_usage, avg_rq, max_rq, min_rq, pressure, runq_rate, glow_intensity, c) do
     rq_skew = max_rq - min_rq
 
     graph
-    |> draw_tape_gauge(data, avg_usage, avg_rq, rq_skew, pressure, runq_rate, config, c)
+    |> draw_tape_gauge(data, avg_usage, avg_rq, rq_skew, pressure, runq_rate, glow_intensity, config, c)
   end
 
   defp pressure_score(data, avg_usage) do
@@ -218,13 +245,32 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
   defp runq_rate(_data, _prev), do: 0.0
 
+  defp sign_of(v) when is_number(v) and v > 0, do: 1
+  defp sign_of(v) when is_number(v) and v < 0, do: -1
+  defp sign_of(_), do: 0
+
+  defp now_ms do
+    System.monotonic_time(:millisecond)
+  end
+
+  defp glow_intensity(now_ms, glow_until) when is_integer(glow_until) do
+    remaining = glow_until - now_ms
+    if remaining > 0 do
+      ease(min(remaining / 1400, 1.0))
+    else
+      0.0
+    end
+  end
+
+  defp glow_intensity(_, _), do: 0.0
+
   defp smooth_pressure(raw, nil), do: raw
   defp smooth_pressure(raw, prev) when is_number(prev) do
     alpha = 0.25
     alpha * raw + (1.0 - alpha) * prev
   end
 
-  defp draw_tape_gauge(graph, data, avg_usage, avg_rq, rq_skew, pressure, runq_rate, config, c) do
+  defp draw_tape_gauge(graph, data, avg_usage, avg_rq, rq_skew, pressure, runq_rate, glow_intensity, config, c) do
     # Horizontal VU-style meter with needle
     x = 20
     y = @header_height + 6
@@ -238,7 +284,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     graph
     |> draw_pressure_fill(x, y, width, height, ratio)
     |> draw_vsi_texts(x + 10, y, 140, height, runq_rate, c)
-    |> draw_vsi_circle(x + 240, y + height / 2, 76, runq_rate, c)
+    |> draw_vsi_circle(x + 240, y + height / 2, 76, runq_rate, glow_intensity, c)
     |> text("RunQ #{data.run_queue_total}",
       fill: pressure_text_color(rq_ratio, c),
       font: :courier,
@@ -315,7 +361,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     |> maybe_text(neg_val, neg_color, font_size, x + width / 2, y + half + half / 2 + font_size / 3)
   end
 
-  defp draw_vsi_circle(graph, cx, cy, radius, rate, c) do
+  defp draw_vsi_circle(graph, cx, cy, radius, rate, glow_intensity, c) do
     clamped = max(-@vsi_max_rate, min(@vsi_max_rate, rate))
     direction = if clamped >= 0, do: :up, else: :down
     angle = vsi_value_to_angle(abs(clamped), direction)
@@ -325,10 +371,60 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     y2 = cy + :math.sin(angle) * needle_len
 
     graph
+    |> draw_vsi_afterglow(cx, cy, radius, glow_intensity)
     |> circle(radius, stroke: {2, c.tick}, translate: {cx, cy})
     |> draw_vsi_ticks(cx, cy, radius, c)
     |> line({{cx, cy}, {x2, y2}}, stroke: {3, c.needle}, cap: :round)
     |> circle(3, fill: c.needle, translate: {cx, cy})
+    |> draw_vsi_chevrons(cx, cy, radius, rate, c)
+  end
+
+  defp draw_vsi_afterglow(graph, _cx, _cy, _radius, glow) when glow <= 0.0, do: graph
+
+  defp draw_vsi_afterglow(graph, cx, cy, radius, glow) do
+    color = warm_glow(0.6)
+    alpha1 = trunc(40 + glow * 140)
+    alpha2 = trunc(20 + glow * 90)
+    alpha3 = trunc(10 + glow * 60)
+
+    graph
+    |> circle(radius + 10, stroke: {2, with_alpha(color, alpha1)}, translate: {cx, cy})
+    |> circle(radius + 18, stroke: {2, with_alpha(color, alpha2)}, translate: {cx, cy})
+    |> circle(radius + 26, stroke: {2, with_alpha(color, alpha3)}, translate: {cx, cy})
+  end
+
+  defp draw_vsi_chevrons(graph, cx, cy, radius, rate, c) do
+    t = min(abs(rate) / @vsi_max_rate, 1.0)
+    up_color = if rate > 0, do: warm_glow(t), else: c.tick
+    down_color = if rate < 0, do: warm_glow(t), else: c.tick
+    alpha = if t < 0.05, do: 40, else: trunc(40 + t * 215)
+
+    # Outer chevrons (at 12 and 6 o'clock)
+    graph
+    |> draw_chevron(cx, cy - radius - 6, 8, :up, with_alpha(up_color, alpha))
+    |> draw_chevron(cx, cy + radius + 6, 8, :down, with_alpha(down_color, alpha))
+    # Inner chevrons (3 steps toward center, shrinking toward center)
+    |> draw_chevron(cx, cy - radius + 10, 7, :up, with_alpha(up_color, alpha))
+    |> draw_chevron(cx, cy - radius + 24, 6, :up, with_alpha(up_color, alpha))
+    |> draw_chevron(cx, cy - radius + 38, 5, :up, with_alpha(up_color, alpha))
+    |> draw_chevron(cx, cy + radius - 10, 7, :down, with_alpha(down_color, alpha))
+    |> draw_chevron(cx, cy + radius - 24, 6, :down, with_alpha(down_color, alpha))
+    |> draw_chevron(cx, cy + radius - 38, 5, :down, with_alpha(down_color, alpha))
+  end
+
+  defp with_alpha({r, g, b}, a), do: {r, g, b, a}
+  defp with_alpha({r, g, b, _}, a), do: {r, g, b, a}
+
+  defp draw_chevron(graph, cx, cy, size, :up, color) do
+    graph
+    |> line({{cx - size, cy + size}, {cx, cy}}, stroke: {2, color}, cap: :round)
+    |> line({{cx, cy}, {cx + size, cy + size}}, stroke: {2, color}, cap: :round)
+  end
+
+  defp draw_chevron(graph, cx, cy, size, :down, color) do
+    graph
+    |> line({{cx - size, cy - size}, {cx, cy}}, stroke: {2, color}, cap: :round)
+    |> line({{cx, cy}, {cx + size, cy - size}}, stroke: {2, color}, cap: :round)
   end
 
   defp draw_vsi_ticks(graph, cx, cy, radius, c) do
@@ -381,7 +477,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
   defp glow_color(rate, :pos, c) do
     if rate > 0 do
       t = ease(min(abs(rate) / @vsi_max_rate, 1.0))
-      lerp_color(c.secondary, c.critical, t)
+      warm_glow(t)
     else
       c.secondary
     end
@@ -390,10 +486,15 @@ defmodule Probnik.Component.SchedulerPressureWidget do
   defp glow_color(rate, :neg, c) do
     if rate < 0 do
       t = ease(min(abs(rate) / @vsi_max_rate, 1.0))
-      lerp_color(c.secondary, c.positive, t)
+      warm_glow(t)
     else
       c.secondary
     end
+  end
+
+  defp warm_glow(t) do
+    # bright orange -> dark red
+    lerp_color({255, 140, 0}, {120, 0, 0}, t)
   end
 
   defp ease(t) do
