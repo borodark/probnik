@@ -1,7 +1,10 @@
 defmodule Probnik.Component.SchedulerPressureWidget do
   @moduledoc """
   Scheduler pressure widget.
-  Shows per-scheduler utilization and run queue lengths.
+  Displays:
+  - A tape-style pressure gauge (combo of avg scheduler util + normalized run queue).
+  - Run-queue totals/avg/skew and avg util text.
+  - Run-queue trend (Δ runq/sec) as large + / - values and a mini VSI dial.
   """
   use Scenic.Component, has_children: false
 
@@ -377,7 +380,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
   defp glow_color(rate, :pos, c) do
     if rate > 0 do
-      t = min(abs(rate) / @vsi_max_rate, 1.0)
+      t = ease(min(abs(rate) / @vsi_max_rate, 1.0))
       lerp_color(c.secondary, c.critical, t)
     else
       c.secondary
@@ -386,11 +389,17 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
   defp glow_color(rate, :neg, c) do
     if rate < 0 do
-      t = min(abs(rate) / @vsi_max_rate, 1.0)
+      t = ease(min(abs(rate) / @vsi_max_rate, 1.0))
       lerp_color(c.secondary, c.positive, t)
     else
       c.secondary
     end
+  end
+
+  defp ease(t) do
+    # Smoothstep for gentle color transitions
+    t2 = min(max(t, 0.0), 1.0)
+    t2 * t2 * (3 - 2 * t2)
   end
 
   defp lerp_color({r1, g1, b1}, {r2, g2, b2}, t) do
