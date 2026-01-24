@@ -11,7 +11,8 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
   @update_interval 2000
   @header_height 60
-  @info_height 0
+  @vsi_max_rate 20
+  @vsi_sweep :math.pi() * 5 / 6
 
   @impl Scenic.Component
   def validate(opts) when is_list(opts), do: {:ok, opts}
@@ -234,6 +235,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     graph
     |> draw_pressure_fill(x, y, width, height, ratio)
     |> draw_vsi_texts(x + 10, y, 140, height, runq_rate, c)
+    |> draw_vsi_circle(x + 240, y + height / 2, 76, runq_rate, c)
     |> text("RunQ #{data.run_queue_total}",
       fill: pressure_text_color(rq_ratio, c),
       font: :courier,
@@ -300,26 +302,95 @@ defmodule Probnik.Component.SchedulerPressureWidget do
   defp draw_vsi_texts(graph, x, y, width, height, rate, c) do
     half = height / 2
     font_size = trunc(half * 0.7)
-    pos_color = if rate > 0, do: c.critical, else: c.secondary
-    neg_color = if rate < 0, do: c.negative, else: c.secondary
-    pos_val = if rate > 0, do: "+#{round(rate)}", else: "+0"
-    neg_val = if rate < 0, do: "-#{round(abs(rate))}", else: "-0"
+    pos_val = if rate > 0, do: "+#{round(rate)}", else: ""
+    neg_val = if rate < 0, do: "-#{round(abs(rate))}", else: ""
+    pos_color = glow_color(rate, :pos, c)
+    neg_color = glow_color(rate, :neg, c)
 
     graph
-    |> text(pos_val,
-      fill: pos_color,
+    |> maybe_text(pos_val, pos_color, font_size, x + width / 2, y + half / 2 + font_size / 3)
+    |> maybe_text(neg_val, neg_color, font_size, x + width / 2, y + half + half / 2 + font_size / 3)
+  end
+
+  defp draw_vsi_circle(graph, cx, cy, radius, rate, c) do
+    clamped = max(-@vsi_max_rate, min(@vsi_max_rate, rate))
+    direction = if clamped >= 0, do: :up, else: :down
+    angle = vsi_value_to_angle(abs(clamped), direction)
+
+    needle_len = radius - 6
+    x2 = cx + :math.cos(angle) * needle_len
+    y2 = cy + :math.sin(angle) * needle_len
+
+    graph
+    |> circle(radius, stroke: {2, c.tick}, translate: {cx, cy})
+    |> draw_vsi_ticks(cx, cy, radius, c)
+    |> line({{cx, cy}, {x2, y2}}, stroke: {3, c.needle}, cap: :round)
+    |> circle(3, fill: c.needle, translate: {cx, cy})
+  end
+
+  defp draw_vsi_ticks(graph, cx, cy, radius, c) do
+    values = [0, 10, 20]
+
+    Enum.reduce(values, graph, fn v, g ->
+      g
+      |> draw_vsi_tick(cx, cy, radius, v, :up, c)
+      |> draw_vsi_tick(cx, cy, radius, v, :down, c)
+    end)
+  end
+
+  defp draw_vsi_tick(graph, cx, cy, radius, value, direction, c) do
+    angle = vsi_value_to_angle(value, direction)
+    inner = radius - 6
+    outer = radius
+
+    x1 = cx + :math.cos(angle) * inner
+    y1 = cy + :math.sin(angle) * inner
+    x2 = cx + :math.cos(angle) * outer
+    y2 = cy + :math.sin(angle) * outer
+
+    graph
+    |> line({{x1, y1}, {x2, y2}}, stroke: {2, c.tick}, cap: :round)
+  end
+
+  defp vsi_value_to_angle(value, :up) do
+    fraction = value / @vsi_max_rate
+    :math.pi() + fraction * @vsi_sweep
+  end
+
+  defp vsi_value_to_angle(value, :down) do
+    fraction = value / @vsi_max_rate
+    :math.pi() - fraction * @vsi_sweep
+  end
+
+  defp maybe_text(graph, "", _color, _size, _x, _y), do: graph
+
+  defp maybe_text(graph, label, color, size, x, y) do
+    graph
+    |> text(label,
+      fill: color,
       font: :courier_bold,
-      font_size: font_size,
+      font_size: size,
       text_align: :center,
-      translate: {x + width / 2, y + half / 2 + font_size / 3}
+      translate: {x, y}
     )
-    |> text(neg_val,
-      fill: neg_color,
-      font: :courier_bold,
-      font_size: font_size,
-      text_align: :center,
-      translate: {x + width / 2, y + half + half / 2 + font_size / 3}
-    )
+  end
+
+  defp glow_color(rate, :pos, c) do
+    if rate > 0 do
+      t = min(abs(rate) / @vsi_max_rate, 1.0)
+      lerp_color(c.secondary, c.critical, t)
+    else
+      c.secondary
+    end
+  end
+
+  defp glow_color(rate, :neg, c) do
+    if rate < 0 do
+      t = min(abs(rate) / @vsi_max_rate, 1.0)
+      lerp_color(c.secondary, c.positive, t)
+    else
+      c.secondary
+    end
   end
 
   defp lerp_color({r1, g1, b1}, {r2, g2, b2}, t) do
