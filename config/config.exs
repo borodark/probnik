@@ -2,7 +2,7 @@ import Config
 
 config :scenic, :assets, module: Probnik.Assets
 
-config :probnik, color_scheme: :sunny_day #:dark_bmw 
+config :probnik, color_scheme: :dark_bmw  #:sunny_day
 
 config :probnik, :viewport,
   name: :main_viewport,

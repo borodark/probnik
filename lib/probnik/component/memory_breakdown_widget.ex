@@ -175,11 +175,12 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
     # Sorted horizontal bars: biggest on the left, smallest on the right
     sorted = Enum.sort_by(rows, & &1.value, :desc)
     start_y = @header_height + 16
-    label_x = 20
-    bar_x = 220
-    bar_width = config.width - bar_x - 30
+    bar_x = 20
+    bar_width = config.width - 40
     row_height = (config.height - start_y - 12) / max(length(sorted), 1)
     bar_height = max(row_height * 0.7, 18)
+    label_size = max(trunc(row_height * 0.42), 16)
+    value_size = max(trunc(row_height * 0.36), 14)
 
     sorted
     |> Enum.with_index(0)
@@ -190,20 +191,20 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
       color = rank_color(idx, c)
 
       g
-      |> text(row.label,
-        fill: c.primary,
-        font: :courier,
-        font_size: 20,
-        translate: {label_x, y + 35}
-      )
       |> rect({fill_w, bar_height},
         fill: color,
         translate: {bar_x, y + row_height * 0.15}
       )
+      |> text(row.label,
+        fill: {0, 0, 0},
+        font: :courier_bold,
+        font_size: label_size,
+        translate: {bar_x + 12, y + row_height * 0.6}
+      )
       |> text(format_mb(row.value),
         fill: c.secondary,
-        font: :courier,
-        font_size: 18,
+        font: :courier_bold,
+        font_size: value_size,
         text_align: :right,
         translate: {bar_x + bar_width, y + row_height * 0.6}
       )

@@ -376,6 +376,13 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     |> draw_vsi_ticks(cx, cy, radius, c)
     |> line({{cx, cy}, {x2, y2}}, stroke: {3, c.needle}, cap: :round)
     |> circle(3, fill: c.needle, translate: {cx, cy})
+    |> text(vsi_signed_value(rate),
+      fill: {0, 0, 0},
+      font: :roboto,
+      font_size: 64,
+      text_align: :center,
+      translate: {cx, cy - radius * 0.3}
+    )
     |> text("Δ runq/sec",
       fill: {0, 0, 0},
       font: :courier_bold,
@@ -384,6 +391,11 @@ defmodule Probnik.Component.SchedulerPressureWidget do
       translate: {cx, cy + radius * 0.45}
     )
     |> draw_vsi_chevrons(cx, cy, radius, rate, c)
+  end
+
+  defp vsi_signed_value(rate) when is_number(rate) do
+    value = round(rate)
+    if value > 0, do: "+#{value}", else: Integer.to_string(value)
   end
 
   defp draw_vsi_afterglow(graph, _cx, _cy, _radius, glow) when glow <= 0.0, do: graph

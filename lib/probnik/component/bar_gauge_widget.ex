@@ -11,8 +11,7 @@ defmodule Probnik.Component.BarGaugeWidget do
   import Scenic.Primitives
 
   @update_interval 1000
-  @row_height 60
-  @header_height 36
+  @header_height 32
   @bar_segments 30  # 3x more segments, skinnier marks
 
   @impl Scenic.Component
@@ -296,25 +295,25 @@ defmodule Probnik.Component.BarGaugeWidget do
   end
 
   defp draw_rows(graph, procs, max_val, config, c) do
+    rows_height = config.height - @header_height - 6
+    row_height = if length(procs) > 0, do: rows_height / length(procs), else: 0
+
     procs
     |> Enum.with_index(1)
     |> Enum.reduce(graph, fn {proc, idx}, g ->
-      draw_row(g, proc, idx, max_val, config, c)
+      draw_row(g, proc, idx, max_val, config, c, row_height)
     end)
   end
 
-  defp draw_row(graph, proc, idx, max_val, config, c) do
-    y = @header_height + 2 + (idx - 1) * @row_height
-    row_inner_height = @row_height - 8
-    bar_height = max(row_inner_height - 20, 12)
+  defp draw_row(graph, proc, idx, max_val, config, c, row_height) do
+    y = @header_height + 2 + (idx - 1) * row_height
+    row_inner_height = row_height - 6
+    bar_height = max(row_inner_height - 16, 12)
 
-    # Layout: 5% type, 35% name, 10% value, 50% meter
-    type_width = config.width * 0.05
-    name_width = config.width * 0.35
-    value_x = type_width + name_width
-    value_width = config.width * 0.1
-    meter_x = value_x + value_width
-    meter_width = config.width - meter_x - 15
+    # Layout: 60% text, 40% meter
+    text_width = config.width * 0.6
+    meter_x = text_width
+    meter_width = config.width - meter_x - 10
 
     # Process type (GS, Sup, Task, etc.)
     type_str = Map.get(proc, :type, "Proc")
@@ -351,15 +350,15 @@ defmodule Probnik.Component.BarGaugeWidget do
       fill: c.primary,
       font: :courier,
       font_size: 20,
-      translate: {type_width + 5, y + row_inner_height / 2 + 7}
+      translate: {40, y + row_inner_height / 2 + 7}
     )
     # Value - in the 10% area before meter
     |> text(value_str,
-      fill: c.primary,
+      fill: c.secondary,
       font: :courier,
-      font_size: 17,
+      font_size: 16,
       text_align: :right,
-      translate: {meter_x - 10, y + row_inner_height / 2 + 6}
+      translate: {meter_x - 8, y + row_inner_height / 2 + 6}
     )
     # Draw bar segments - slimmer to match text height
     |> draw_bar_segments(
