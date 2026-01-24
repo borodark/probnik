@@ -174,15 +174,17 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
   defp draw_sorted_bars(graph, rows, total, config, c) do
     # Sorted horizontal bars: biggest on the left, smallest on the right
     sorted = Enum.sort_by(rows, & &1.value, :desc)
-    start_y = @header_height + 80
+    start_y = @header_height + 16
     label_x = 20
     bar_x = 220
     bar_width = config.width - bar_x - 30
+    row_height = (config.height - start_y - 12) / max(length(sorted), 1)
+    bar_height = max(row_height * 0.7, 18)
 
     sorted
     |> Enum.with_index(0)
     |> Enum.reduce(graph, fn {row, idx}, g ->
-      y = start_y + idx * @row_height
+      y = start_y + idx * row_height
       ratio = if total > 0, do: row.value / total, else: 0.0
       fill_w = bar_width * ratio
       color = rank_color(idx, c)
@@ -194,20 +196,16 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
         font_size: 20,
         translate: {label_x, y + 35}
       )
-      |> rect({bar_width, 20},
-        fill: dim_color(c.primary, 0.12),
-        translate: {bar_x, y + 18}
-      )
-      |> rect({fill_w, 20},
+      |> rect({fill_w, bar_height},
         fill: color,
-        translate: {bar_x, y + 18}
+        translate: {bar_x, y + row_height * 0.15}
       )
       |> text(format_mb(row.value),
         fill: c.secondary,
         font: :courier,
         font_size: 18,
         text_align: :right,
-        translate: {bar_x + bar_width, y + 35}
+        translate: {bar_x + bar_width, y + row_height * 0.6}
       )
     end)
   end
