@@ -249,10 +249,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     fill_w = width * ratio
 
     graph
-    |> rect({fill_w, height},
-      fill: pressure_fill_color(ratio),
-      translate: {x, y}
-    )
+    |> draw_pressure_fill(x, y, width, height, ratio)
     |> draw_ticks(x, y, width, height, ticks, c)
     |> line({{needle_x, y - 6}, {needle_x, y + height + 6}}, stroke: {3, c.needle})
   end
@@ -266,11 +263,48 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     end)
   end
 
-  defp pressure_fill_color(ratio) do
-    r = trunc(80 + 120 * ratio)
-    g = trunc(5 * (1.0 - ratio))
-    b = trunc(5 * (1.0 - ratio))
-    {r, g, b}
+  defp draw_pressure_fill(graph, x, y, width, height, ratio) do
+    fill_w = width * min(max(ratio, 0.0), 1.0)
+
+    segments = [
+      {0.25, {0, 0, 0}, {0, 180, 0}},
+      {0.35, {0, 180, 0}, {255, 180, 0}},
+      {0.25, {255, 180, 0}, {255, 100, 0}},
+      {0.15, {255, 100, 0}, {135, 0, 0}}
+    ]
+
+    {graph, _} =
+      Enum.reduce(segments, {graph, 0.0}, fn {seg_ratio, c1, c2}, {g, offset} ->
+        seg_w_full = width * seg_ratio
+        remaining = fill_w - offset
+        seg_w = min(seg_w_full, max(remaining, 0.0))
+
+        if seg_w > 0.0 do
+          t = if seg_w_full == 0.0, do: 0.0, else: seg_w / seg_w_full
+          c2p = lerp_color(c1, c2, t)
+
+          g =
+            g
+            |> rect({seg_w, height},
+              fill: {:linear, {0, 0, seg_w, 0, c1, c2p}},
+              translate: {x + offset, y}
+            )
+
+          {g, offset + seg_w}
+        else
+          {g, offset}
+        end
+      end)
+
+    graph
+  end
+
+  defp lerp_color({r1, g1, b1}, {r2, g2, b2}, t) do
+    {
+      trunc(r1 + (r2 - r1) * t),
+      trunc(g1 + (g2 - g1) * t),
+      trunc(b1 + (b2 - b1) * t)
+    }
   end
 
   defp dim_color({r, g, b}, factor) do
