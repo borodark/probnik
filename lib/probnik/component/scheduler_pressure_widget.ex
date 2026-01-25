@@ -417,20 +417,18 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     up_color = if rate > 0, do: warm_glow(t), else: c.tick
     down_color = if rate < 0, do: warm_glow(t), else: c.tick
     base_alpha = if t < 0.05, do: 40, else: trunc(40 + t * 215)
-    phase = rem(now_ms(), 1200) / 1200
+    phase = rem(now_ms(), 1000) / 1000
 
     up_chevrons = [
-      {cy - radius + 38, 5},
-      {cy - radius + 24, 6},
-      {cy - radius + 10, 7},
-      {cy - radius - 6, 8}
+      {cy - radius + 28, 9},
+      {cy - radius + 8, 11},
+      {cy - radius - 12, 13}
     ]
 
     down_chevrons = [
-      {cy + radius - 38, 5},
-      {cy + radius - 24, 6},
-      {cy + radius - 10, 7},
-      {cy + radius + 6, 8}
+      {cy + radius - 28, 9},
+      {cy + radius - 8, 11},
+      {cy + radius + 12, 13}
     ]
 
     graph
@@ -440,13 +438,26 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
   defp draw_animated_chevrons(graph, cx, chevrons, dir, rate, color, base_alpha, phase) do
     count = length(chevrons)
+    active_idx = trunc(phase * count) |> min(count - 1) |> max(0)
 
     Enum.with_index(chevrons, 0)
     |> Enum.reduce(graph, fn {{cy, size}, idx}, g ->
-      target = idx / max(count - 1, 1)
-      wave = max(0.0, 1.0 - abs(phase - target) / 0.25)
-      active = (dir == :up and rate > 0) or (dir == :down and rate < 0)
-      alpha = if active, do: trunc(base_alpha * wave), else: base_alpha
+      active = (dir == :up and rate >= 0) or (dir == :down and rate < 0)
+      dist = abs(idx - active_idx)
+      wave =
+        cond do
+          dist == 0 -> 1.0
+          dist == 1 -> 0.6
+          dist == 2 -> 0.3
+          true -> 0.15
+        end
+
+      alpha =
+        if active do
+          trunc(base_alpha * wave)
+        else
+          trunc(base_alpha * 0.15)
+        end
 
       g
       |> draw_chevron(cx, cy, size, dir, with_alpha(color, alpha))
@@ -458,14 +469,14 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
   defp draw_chevron(graph, cx, cy, size, :up, color) do
     graph
-    |> line({{cx - size, cy + size}, {cx, cy}}, stroke: {2, color}, cap: :round)
-    |> line({{cx, cy}, {cx + size, cy + size}}, stroke: {2, color}, cap: :round)
+    |> line({{cx - size, cy + size}, {cx, cy}}, stroke: {5, color}, cap: :round)
+    |> line({{cx, cy}, {cx + size, cy + size}}, stroke: {5, color}, cap: :round)
   end
 
   defp draw_chevron(graph, cx, cy, size, :down, color) do
     graph
-    |> line({{cx - size, cy - size}, {cx, cy}}, stroke: {2, color}, cap: :round)
-    |> line({{cx, cy}, {cx + size, cy - size}}, stroke: {2, color}, cap: :round)
+    |> line({{cx - size, cy - size}, {cx, cy}}, stroke: {5, color}, cap: :round)
+    |> line({{cx, cy}, {cx + size, cy - size}}, stroke: {5, color}, cap: :round)
   end
 
   defp draw_vsi_ticks(graph, cx, cy, radius, c) do

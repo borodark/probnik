@@ -78,7 +78,6 @@ defmodule Probnik.Component.BarGaugeWidget do
         fetch_local(attribute)
     end
 
-    IO.puts("fetch_top5(#{attribute}): got #{length(result)} processes")
     result
   rescue
     e ->
