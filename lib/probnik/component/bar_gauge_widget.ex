@@ -463,10 +463,11 @@ defmodule Probnik.Component.BarGaugeWidget do
   end
 
   defp draw_rows(graph, procs, max_val, config, c) do
+    visible = Enum.filter(procs, fn p -> (p.value || 0) > 0 end)
     rows_height = config.height - @header_height - 6
-    row_height = if length(procs) > 0, do: rows_height / length(procs), else: 0
+    row_height = if length(visible) > 0, do: rows_height / length(visible), else: 0
 
-    procs
+    visible
     |> Enum.with_index(1)
     |> Enum.reduce(graph, fn {proc, idx}, g ->
       draw_row(g, proc, idx, max_val, config, c, row_height)
@@ -513,11 +514,11 @@ defmodule Probnik.Component.BarGaugeWidget do
     )
     # Value - in the 10% area before meter
     |> text(value_str,
-      fill: c.secondary,
-      font: :courier,
-      font_size: max(trunc(row_inner_height * 0.34), 14),
+      fill: {255, 180, 0},
+      font: :courier_bold,
+      font_size: max(trunc(row_inner_height * 0.5), 18),
       text_align: :right,
-      translate: {meter_x - 6, y + row_inner_height / 2 + 5}
+      translate: {meter_x - 4, y + row_inner_height / 2 + 4}
     )
     # Draw bar segments - slimmer to match text height
     |> draw_bar_segments(
