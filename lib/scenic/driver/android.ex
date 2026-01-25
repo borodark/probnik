@@ -25,8 +25,6 @@ defmodule Scenic.Driver.Android do
     socket_path: [type: :string, default: @socket_path]
   ]
 
-  defstruct [:socket, :socket_path, :viewport, :connected]
-
   @impl Scenic.Driver
   def validate_opts(opts), do: NimbleOptions.validate(Enum.into(opts, []), @opts_schema)
 
@@ -35,119 +33,128 @@ defmodule Scenic.Driver.Android do
     socket_path = opts[:socket_path] || @socket_path
 
     Logger.info("#{__MODULE__}: Initializing with socket #{socket_path}")
+    IO.puts("#{__MODULE__}: init socket_path=#{socket_path}")
 
-    state = %__MODULE__{
-      socket: nil,
-      socket_path: socket_path,
-      viewport: driver.viewport,
-      connected: false
-    }
+    driver =
+      Scenic.Driver.assign(driver,
+        socket: nil,
+        socket_path: socket_path,
+        connected: false
+      )
 
     # Try to connect
-    state = try_connect(state)
+    driver = try_connect(driver)
 
-    {:ok, state}
+    {:ok, driver}
   end
 
   @impl Scenic.Driver
-  def reset_scene(state) do
+  def reset_scene(driver) do
     Logger.debug("#{__MODULE__}: reset_scene")
-    send_message(state, @msg_reset, <<>>)
-    {:ok, state}
+    send_message(driver, @msg_reset, <<>>)
+    {:ok, driver}
   end
 
   @impl Scenic.Driver
-  def clear_color(color, state) do
+  def clear_color(color, driver) do
     Logger.debug("#{__MODULE__}: clear_color #{inspect(color)}")
 
     {r, g, b, a} = normalize_color(color)
     payload = <<r::float-32, g::float-32, b::float-32, a::float-32>>
 
-    send_message(state, @msg_clear_color, payload)
-    {:ok, state}
+    send_message(driver, @msg_clear_color, payload)
+    {:ok, driver}
   end
 
   @impl Scenic.Driver
-  def update_scene(ids, state) do
+  def update_scene(ids, driver) do
     Logger.debug("#{__MODULE__}: update_scene #{inspect(ids)}")
 
     Enum.each(ids, fn id ->
-      case ViewPort.get_script_by_id(state.viewport, id) do
+      case ViewPort.get_script(driver.viewport, id) do
         {:ok, script} ->
-          serialized = Scenic.Script.serialize(script)
-          # Send script ID (4 bytes) + serialized data
-          payload = <<id::32>> <> serialized
-          send_message(state, @msg_update_scene, payload)
+          serialized = script |> Scenic.Script.serialize() |> IO.iodata_to_binary()
+          # Native side ignores script id for now; send serialized script only
+          send_message(driver, @msg_update_scene, serialized)
 
-        _ ->
+        {:error, :not_found} ->
           :ok
       end
     end)
 
-    {:ok, state}
+    {:ok, driver}
   end
 
   @impl Scenic.Driver
-  def del_scripts(ids, state) do
+  def del_scripts(ids, driver) do
     Logger.debug("#{__MODULE__}: del_scripts #{inspect(ids)}")
 
     payload = :erlang.term_to_binary(ids)
-    send_message(state, @msg_delete_scripts, payload)
+    send_message(driver, @msg_delete_scripts, payload)
 
-    {:ok, state}
+    {:ok, driver}
   end
 
   @impl Scenic.Driver
-  def request_input(_inputs, state) do
+  def request_input(_inputs, driver) do
     # Input will come from Android side
-    {:ok, state}
+    {:ok, driver}
   end
 
   @impl Scenic.Driver
-  def handle_info({:tcp, _socket, data}, state) do
+  def handle_info({:tcp, _socket, data}, driver) do
     # Handle input events from Android
-    handle_input(data, state)
-    {:noreply, state}
+    handle_input(data, driver)
+    {:noreply, driver}
   end
 
-  def handle_info({:tcp_closed, _socket}, state) do
+  def handle_info({:tcp_closed, _socket}, driver) do
     Logger.warning("#{__MODULE__}: Socket closed, reconnecting...")
-    state = %{state | socket: nil, connected: false}
+    driver = Scenic.Driver.assign(driver, socket: nil, connected: false)
     Process.send_after(self(), :reconnect, 1000)
-    {:noreply, state}
+    {:noreply, driver}
   end
 
-  def handle_info(:reconnect, state) do
-    state = try_connect(state)
-    {:noreply, state}
+  def handle_info(:reconnect, driver) do
+    driver = try_connect(driver)
+    {:noreply, driver}
   end
 
-  def handle_info(msg, state) do
+  def handle_info(msg, driver) do
     Logger.debug("#{__MODULE__}: Unhandled message: #{inspect(msg)}")
-    {:noreply, state}
+    {:noreply, driver}
   end
 
   # Private functions
 
-  defp try_connect(state) do
-    case :gen_tcp.connect({:local, state.socket_path}, 0, [:binary, active: true]) do
+  defp try_connect(driver) do
+    socket_path = Scenic.Driver.get(driver, :socket_path)
+
+    case :gen_tcp.connect({:local, socket_path}, 0, [:binary, active: true]) do
       {:ok, socket} ->
         Logger.info("#{__MODULE__}: Connected to Android host")
-        %{state | socket: socket, connected: true}
+        IO.puts("#{__MODULE__}: connected")
+        Scenic.Driver.assign(driver, socket: socket, connected: true)
 
       {:error, reason} ->
         Logger.warning("#{__MODULE__}: Connection failed: #{inspect(reason)}, retrying in 1s")
+        IO.puts("#{__MODULE__}: connect failed #{inspect(reason)}")
         Process.send_after(self(), :reconnect, 1000)
-        state
+        driver
     end
   end
 
-  defp send_message(%{socket: nil}, _type, _payload), do: :ok
-  defp send_message(%{socket: socket}, type, payload) do
+  defp send_message(driver, _type, _payload) when is_nil(driver), do: :ok
+  defp send_message(driver, type, payload) do
+    socket = Scenic.Driver.get(driver, :socket)
+    if is_nil(socket) do
+      :ok
+    else
     # Message format: [type:1][length:4][payload:length]
     length = byte_size(payload)
     message = <<type::8, length::32>> <> payload
     :gen_tcp.send(socket, message)
+    end
   end
 
   defp normalize_color({r, g, b}) when is_integer(r), do: {r / 255, g / 255, b / 255, 1.0}
@@ -164,7 +171,7 @@ defmodule Scenic.Driver.Android do
     end
   end
 
-  defp handle_touch_input(<<action::8, x::float-32, y::float-32>>, state) do
+  defp handle_touch_input(<<action::8, x::float-32, y::float-32>>, driver) do
     input_type = case action do
       0 -> :cursor_button  # down
       1 -> :cursor_button  # up
@@ -179,7 +186,7 @@ defmodule Scenic.Driver.Android do
         2 -> {:cursor_pos, {x, y}}
       end
 
-      Scenic.ViewPort.input(state.viewport, input)
+      Scenic.ViewPort.input(driver.viewport, input)
     end
   end
 

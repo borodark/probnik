@@ -1,6 +1,8 @@
 defmodule Probnik.Scene.Main do
   use Scenic.Scene
 
+  require Logger
+
   alias Scenic.Graph
   import Scenic.Primitives
 
@@ -15,6 +17,7 @@ defmodule Probnik.Scene.Main do
 
   @impl Scenic.Scene
   def init(scene, _params, _opts) do
+    Logger.info("Probnik.Scene.Main init()")
     c = ColorScheme.current()
 
     # 1x4 stacked layout (portrait)

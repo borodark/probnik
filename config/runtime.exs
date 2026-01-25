@@ -4,7 +4,10 @@ import Config
 is_android = System.get_env("ANDROID_ROOT") != nil or
              File.exists?("/system/build.prop")
 
+IO.puts("runtime.exs loaded - is_android=#{is_android}")
+
 if is_android do
+  IO.puts("runtime.exs: Android detected, configuring Scenic.Driver.Android")
   # Remote node configuration
   config :probnik,
     remote_host: "192.168.0.249",

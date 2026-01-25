@@ -20,12 +20,21 @@ source "$(dirname "$0")/env.sh"
 
 ANDROID_API=26
 TOOLCHAIN="${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64"
+SYSROOT="${TOOLCHAIN}/sysroot"
 
 # Check for OpenSSL
 OPENSSL_FLAGS=""
 if [[ -n "${OPENSSL_DIR:-}" && -d "${OPENSSL_DIR}" ]]; then
   echo "==> Using OpenSSL from: ${OPENSSL_DIR}"
   OPENSSL_FLAGS="--with-ssl=${OPENSSL_DIR}"
+  export ERL_XCOMP_SYSROOT="${SYSROOT}"
+  export erl_xcomp_sysroot="${SYSROOT}"
+  export CPPFLAGS="-I${OPENSSL_DIR}/include"
+  export LDFLAGS="-L${OPENSSL_DIR}/lib"
+  export SSL_CFLAGS="-I${OPENSSL_DIR}/include"
+  export SSL_LDFLAGS="-L${OPENSSL_DIR}/lib"
+  export SSL_LIBS="${OPENSSL_DIR}/lib/libssl.a ${OPENSSL_DIR}/lib/libcrypto.a"
+  export LIBS="${OPENSSL_DIR}/lib/libssl.a ${OPENSSL_DIR}/lib/libcrypto.a"
 else
   echo "==> No OPENSSL_DIR set - crypto module will be skipped"
   echo "    To enable crypto, first run: ./android/build_openssl.sh"

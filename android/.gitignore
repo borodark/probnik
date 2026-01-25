@@ -39,3 +39,8 @@ google-services.json
 
 # Android Profiling
 *.hprof
+/*log/
+/*log
+/*logs
+/logs
+**/*logs

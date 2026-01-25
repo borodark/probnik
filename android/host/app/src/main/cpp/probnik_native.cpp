@@ -41,6 +41,7 @@ static int g_client_socket = -1;
 static std::atomic<bool> g_running{false};
 static std::thread g_socket_thread;
 static std::mutex g_render_mutex;
+static std::atomic<bool> g_logged_first_msg{false};
 
 // Render state
 static float g_clear_color[4] = {0.1f, 0.1f, 0.1f, 1.0f};
@@ -53,6 +54,9 @@ static bool start_beam();
 static void start_socket_server();
 static void socket_server_thread();
 static void handle_message(uint8_t type, const std::vector<uint8_t>& payload);
+static std::string read_asset_manifest(AAssetManager* mgr);
+static bool write_file(const std::string& path, const std::string& content);
+static bool copy_file(const std::string& src, const std::string& dst);
 
 extern "C" {
 
@@ -67,19 +71,39 @@ Java_com_probnik_ProbnikNative_init(JNIEnv* env, jclass clazz,
     LOGI("init() - release_root: %s", g_release_root.c_str());
     LOGI("init() - socket_path: %s", g_socket_path.c_str());
 
-    // Check if already extracted
-    std::string marker = g_release_root + "/.extracted";
-    struct stat st;
-    if (stat(marker.c_str(), &st) != 0) {
-        LOGI("First run - extracting assets...");
+    AAssetManager* mgr = AAssetManager_fromJava(env, asset_manager);
+    if (!mgr) {
+        LOGE("Failed to get AAssetManager");
+        return;
+    }
+
+    std::string manifest_content = read_asset_manifest(mgr);
+    std::string marker = g_release_root + "/.extracted_manifest";
+    bool needs_extract = true;
+
+    if (!manifest_content.empty()) {
+        std::ifstream in(marker);
+        if (in) {
+            std::stringstream buffer;
+            buffer << in.rdbuf();
+            if (buffer.str() == manifest_content) {
+                needs_extract = false;
+            }
+        }
+    }
+
+    if (needs_extract) {
+        LOGI("Extracting assets...");
         if (!extract_assets(env, asset_manager, g_release_root)) {
             LOGE("Failed to extract assets!");
             return;
         }
-        std::ofstream(marker).close();
+        if (!manifest_content.empty()) {
+            write_file(marker, manifest_content);
+        }
         LOGI("Assets extracted successfully");
     } else {
-        LOGI("Assets already extracted");
+        LOGI("Assets already extracted (manifest match)");
     }
 
     // Find ERTS version directory
@@ -270,6 +294,10 @@ static void socket_server_thread() {
             uint8_t msg_type = header[0];
             uint32_t length = (header[1] << 24) | (header[2] << 16) | (header[3] << 8) | header[4];
 
+            if (!g_logged_first_msg.exchange(true)) {
+                LOGI("First Scenic message: type=%u len=%u", msg_type, length);
+            }
+
             // Read payload
             std::vector<uint8_t> payload(length);
             if (length > 0) {
@@ -365,6 +393,8 @@ static bool start_beam() {
     std::string boot_file = releases_dir + "/" + release_vsn + "/start";
     std::string vm_args_file = releases_dir + "/" + release_vsn + "/vm.args";
     std::string sys_config = releases_dir + "/" + release_vsn + "/sys";
+    std::string sys_config_file = releases_dir + "/" + release_vsn + "/sys.config";
+    std::string release_tmp = g_release_root + "/tmp";
     std::string lib_dir = g_release_root + "/lib";
 
     // ROOTDIR should be the erlang root (contains lib/, releases/, erts-VERSION/)
@@ -405,6 +435,15 @@ static bool start_beam() {
         setenv("RELEASE_ROOT", g_release_root.c_str(), 1);
         setenv("RELEASE_VSN", release_vsn.c_str(), 1);
         setenv("RELEASE_NAME", "probnik", 1);
+        setenv("RELEASE_CONFIG_DIR", (releases_dir + "/" + release_vsn).c_str(), 1);
+        mkdir(release_tmp.c_str(), 0755);
+        std::string release_sys_config = release_tmp + "/probnik-" + release_vsn + ".runtime";
+        std::string release_sys_config_file = release_sys_config + ".config";
+        if (!copy_file(sys_config_file, release_sys_config_file)) {
+            fprintf(stderr, "Failed to copy sys.config to %s\n", release_sys_config_file.c_str());
+        }
+        setenv("RELEASE_TMP", release_tmp.c_str(), 1);
+        setenv("RELEASE_SYS_CONFIG", release_sys_config.c_str(), 1);
         setenv("ANDROID_ROOT", "/system", 1);  // Signal to Elixir that we're on Android
 
         // Log environment for debugging
@@ -495,6 +534,36 @@ static bool copy_asset_file(AAssetManager* mgr, const std::string& asset_path, c
     return true;
 }
 
+static std::string read_asset_manifest(AAssetManager* mgr) {
+    AAsset* manifest = AAssetManager_open(mgr, "erlang/file_manifest.txt", AASSET_MODE_BUFFER);
+    if (!manifest) {
+        LOGE("No file_manifest.txt found");
+        return "";
+    }
+
+    const char* data = static_cast<const char*>(AAsset_getBuffer(manifest));
+    off_t length = AAsset_getLength(manifest);
+    std::string manifest_content(data, length);
+    AAsset_close(manifest);
+    return manifest_content;
+}
+
+static bool write_file(const std::string& path, const std::string& content) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    return out.good();
+}
+
+static bool copy_file(const std::string& src, const std::string& dst) {
+    std::ifstream in(src, std::ios::binary);
+    if (!in) return false;
+    std::ofstream out(dst, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out << in.rdbuf();
+    return out.good();
+}
+
 static bool extract_assets(JNIEnv* env, jobject asset_manager_obj, const std::string& dest_dir) {
     AAssetManager* mgr = AAssetManager_fromJava(env, asset_manager_obj);
     if (!mgr) {
@@ -504,16 +573,10 @@ static bool extract_assets(JNIEnv* env, jobject asset_manager_obj, const std::st
 
     mkdir(dest_dir.c_str(), 0755);
 
-    AAsset* manifest = AAssetManager_open(mgr, "erlang/file_manifest.txt", AASSET_MODE_BUFFER);
-    if (!manifest) {
-        LOGE("No file_manifest.txt found");
+    std::string manifest_content = read_asset_manifest(mgr);
+    if (manifest_content.empty()) {
         return false;
     }
-
-    const char* data = static_cast<const char*>(AAsset_getBuffer(manifest));
-    off_t length = AAsset_getLength(manifest);
-    std::string manifest_content(data, length);
-    AAsset_close(manifest);
 
     std::istringstream iss(manifest_content);
     std::string line;
