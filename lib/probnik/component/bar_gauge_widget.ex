@@ -144,11 +144,11 @@ defmodule Probnik.Component.BarGaugeWidget do
              try_extract_mfa(Keyword.get(info, :initial_call)) ||
              try_extract_mfa(Keyword.get(info, :current_function)) ||
              try_registered_name(info) ||
-             {"UNK", "unknown", nil}
+             {"UNK", "_app.", nil}
 
     result
   rescue
-    _ -> {"UNK", "unknown", nil}
+    _ -> {"UNK", "_app.", nil}
   end
 
   defp try_extract_mfa({mod, fun, arity}) when is_atom(mod) and is_atom(fun) do
@@ -331,7 +331,7 @@ defmodule Probnik.Component.BarGaugeWidget do
 
   defp clean_label(label) when is_binary(label) do
     if String.contains?(label, "#PID") do
-      "unknown"
+      "_app."
     else
       label
     end
