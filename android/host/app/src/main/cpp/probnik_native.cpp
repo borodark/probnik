@@ -4,6 +4,8 @@
 #include <android/asset_manager_jni.h>
 #include <GLES3/gl3.h>
 
+#include "scenic_local/renderer_android.h"
+
 #include <string>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -19,6 +21,7 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <deque>
 
 #define LOG_TAG "ProbnikNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -29,6 +32,8 @@
 #define MSG_UPDATE_SCENE 2
 #define MSG_DELETE_SCRIPTS 3
 #define MSG_RESET 4
+#define MSG_PUT_FONT 5
+#define MSG_PUT_IMAGE 6
 
 static std::string g_release_root;
 static std::string g_erts_bin;
@@ -42,10 +47,15 @@ static std::atomic<bool> g_running{false};
 static std::thread g_socket_thread;
 static std::mutex g_render_mutex;
 static std::atomic<bool> g_logged_first_msg{false};
+static std::deque<std::pair<uint8_t, std::vector<uint8_t>>> g_pending_msgs;
 
 // Render state
-static float g_clear_color[4] = {0.1f, 0.1f, 0.1f, 1.0f};
-static bool g_needs_clear = true;
+static GLuint g_test_program = 0;
+static GLuint g_test_vao = 0;
+static GLuint g_test_vbo = 0;
+static bool g_test_ready = false;
+static bool g_renderer_ready = false;
+static bool g_has_scene = false;
 
 // Forward declarations
 static bool extract_assets(JNIEnv* env, jobject asset_manager, const std::string& dest_dir);
@@ -54,9 +64,12 @@ static bool start_beam();
 static void start_socket_server();
 static void socket_server_thread();
 static void handle_message(uint8_t type, const std::vector<uint8_t>& payload);
+static void process_pending_messages();
 static std::string read_asset_manifest(AAssetManager* mgr);
 static bool write_file(const std::string& path, const std::string& content);
 static bool copy_file(const std::string& src, const std::string& dst);
+static void ensure_test_triangle();
+static GLuint compile_shader(GLenum type, const char* src);
 
 extern "C" {
 
@@ -148,20 +161,41 @@ Java_com_probnik_ProbnikNative_resize(JNIEnv* env, jclass clazz, jint width, jin
     g_screen_height = height;
     LOGI("resize(%d, %d)", width, height);
 
-    // TODO: Send resize event to Scenic via socket
+    if (g_renderer_ready) {
+        scenic_android_resize(g_screen_width, g_screen_height, 1.0f);
+    }
 }
 
 JNIEXPORT void JNICALL
 Java_com_probnik_ProbnikNative_render(JNIEnv* env, jclass clazz) {
     std::lock_guard<std::mutex> lock(g_render_mutex);
 
-    if (g_needs_clear) {
-        glClearColor(g_clear_color[0], g_clear_color[1], g_clear_color[2], g_clear_color[3]);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    if (g_screen_width > 0 && g_screen_height > 0) {
+        glViewport(0, 0, g_screen_width, g_screen_height);
     }
 
-    // TODO: Render Scenic scripts
-    // For now, just draw a simple triangle to verify GL works
+    if (!g_renderer_ready && g_screen_width > 0 && g_screen_height > 0) {
+        scenic_android_init(g_screen_width, g_screen_height, 1.0f);
+        g_renderer_ready = true;
+    }
+
+    if (g_renderer_ready) {
+        process_pending_messages();
+    }
+
+    if (g_renderer_ready && g_has_scene) {
+        scenic_android_render();
+    } else {
+        ensure_test_triangle();
+        if (g_test_ready) {
+            glUseProgram(g_test_program);
+            glBindVertexArray(g_test_vao);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBindVertexArray(0);
+            glUseProgram(0);
+        }
+    }
+
     static bool first_render = true;
     if (first_render) {
         LOGI("First render frame");
@@ -174,6 +208,13 @@ Java_com_probnik_ProbnikNative_destroy(JNIEnv* env, jclass clazz) {
     LOGI("destroy()");
 
     g_running = false;
+
+    {
+        std::lock_guard<std::mutex> lock(g_render_mutex);
+        scenic_android_shutdown();
+        g_renderer_ready = false;
+        g_has_scene = false;
+    }
 
     if (g_client_socket >= 0) {
         close(g_client_socket);
@@ -316,45 +357,80 @@ static void socket_server_thread() {
 }
 
 static void handle_message(uint8_t type, const std::vector<uint8_t>& payload) {
+    std::lock_guard<std::mutex> lock(g_render_mutex);
+    g_pending_msgs.emplace_back(type, payload);
+}
+
+static void process_pending_messages() {
+    while (!g_pending_msgs.empty()) {
+        auto msg = std::move(g_pending_msgs.front());
+        g_pending_msgs.pop_front();
+        const uint8_t type = msg.first;
+        const std::vector<uint8_t>& payload = msg.second;
+
     switch (type) {
         case MSG_CLEAR_COLOR: {
             if (payload.size() >= 16) {
-                std::lock_guard<std::mutex> lock(g_render_mutex);
-                memcpy(&g_clear_color[0], payload.data(), 4);
-                memcpy(&g_clear_color[1], payload.data() + 4, 4);
-                memcpy(&g_clear_color[2], payload.data() + 8, 4);
-                memcpy(&g_clear_color[3], payload.data() + 12, 4);
-                g_needs_clear = true;
-                LOGI("Clear color: %.2f, %.2f, %.2f, %.2f",
-                     g_clear_color[0], g_clear_color[1], g_clear_color[2], g_clear_color[3]);
+                float r, g, b, a;
+                memcpy(&r, payload.data(), 4);
+                memcpy(&g, payload.data() + 4, 4);
+                memcpy(&b, payload.data() + 8, 4);
+                memcpy(&a, payload.data() + 12, 4);
+                scenic_android_set_clear_color(r, g, b, a);
+                LOGI("Clear color: %.2f, %.2f, %.2f, %.2f", r, g, b, a);
             }
             break;
         }
 
         case MSG_UPDATE_SCENE: {
-            // TODO: Parse and render Scenic script
-            LOGI("Update scene: %zu bytes", payload.size());
+            if (payload.empty()) {
+                LOGI("Update scene: empty payload");
+                break;
+            }
+
+            scenic_android_put_script(payload.data(), static_cast<int>(payload.size()));
+            g_has_scene = true;
             break;
         }
 
         case MSG_DELETE_SCRIPTS: {
-            LOGI("Delete scripts");
+            if (payload.empty()) {
+                LOGI("Delete scripts: empty payload");
+                break;
+            }
+
+            scenic_android_delete_script(payload.data(), static_cast<int>(payload.size()));
             break;
         }
 
         case MSG_RESET: {
             LOGI("Reset scene");
-            std::lock_guard<std::mutex> lock(g_render_mutex);
-            g_clear_color[0] = 0.1f;
-            g_clear_color[1] = 0.1f;
-            g_clear_color[2] = 0.1f;
-            g_clear_color[3] = 1.0f;
+            scenic_android_reset();
+            break;
+        }
+
+        case MSG_PUT_FONT: {
+            if (payload.empty()) {
+                LOGI("Put font: empty payload");
+                break;
+            }
+            scenic_android_put_font(payload.data(), static_cast<int>(payload.size()));
+            break;
+        }
+
+        case MSG_PUT_IMAGE: {
+            if (payload.empty()) {
+                LOGI("Put image: empty payload");
+                break;
+            }
+            scenic_android_put_image(payload.data(), static_cast<int>(payload.size()));
             break;
         }
 
         default:
             LOGI("Unknown message type: %d", type);
             break;
+    }
     }
 }
 
@@ -564,6 +640,99 @@ static bool copy_file(const std::string& src, const std::string& dst) {
     return out.good();
 }
 
+static GLuint compile_shader(GLenum type, const char* src) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &src, nullptr);
+    glCompileShader(shader);
+    GLint ok = GL_FALSE;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        GLint len = 0;
+        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &len);
+        std::string log(len, '\0');
+        if (len > 0) {
+            glGetShaderInfoLog(shader, len, nullptr, log.data());
+        }
+        LOGE("Shader compile failed: %s", log.c_str());
+        glDeleteShader(shader);
+        return 0;
+    }
+    return shader;
+}
+
+static void ensure_test_triangle() {
+    if (g_test_ready) return;
+
+    const char* vs_src =
+        "#version 300 es\n"
+        "layout(location = 0) in vec2 a_pos;\n"
+        "layout(location = 1) in vec3 a_color;\n"
+        "out vec3 v_color;\n"
+        "void main() {\n"
+        "  v_color = a_color;\n"
+        "  gl_Position = vec4(a_pos, 0.0, 1.0);\n"
+        "}\n";
+
+    const char* fs_src =
+        "#version 300 es\n"
+        "precision mediump float;\n"
+        "in vec3 v_color;\n"
+        "out vec4 fragColor;\n"
+        "void main() {\n"
+        "  fragColor = vec4(v_color, 1.0);\n"
+        "}\n";
+
+    GLuint vs = compile_shader(GL_VERTEX_SHADER, vs_src);
+    GLuint fs = compile_shader(GL_FRAGMENT_SHADER, fs_src);
+    if (!vs || !fs) return;
+
+    g_test_program = glCreateProgram();
+    glAttachShader(g_test_program, vs);
+    glAttachShader(g_test_program, fs);
+    glLinkProgram(g_test_program);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    GLint linked = GL_FALSE;
+    glGetProgramiv(g_test_program, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        GLint len = 0;
+        glGetProgramiv(g_test_program, GL_INFO_LOG_LENGTH, &len);
+        std::string log(len, '\0');
+        if (len > 0) {
+            glGetProgramInfoLog(g_test_program, len, nullptr, log.data());
+        }
+        LOGE("Program link failed: %s", log.c_str());
+        glDeleteProgram(g_test_program);
+        g_test_program = 0;
+        return;
+    }
+
+    const GLfloat verts[] = {
+        // x, y,    r, g, b
+         0.0f,  0.8f, 1.0f, 0.2f, 0.2f,
+        -0.8f, -0.8f, 0.2f, 1.0f, 0.2f,
+         0.8f, -0.8f, 0.2f, 0.2f, 1.0f
+    };
+
+    glGenVertexArrays(1, &g_test_vao);
+    glGenBuffers(1, &g_test_vbo);
+    glBindVertexArray(g_test_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_test_vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat),
+                          (void*)(2 * sizeof(GLfloat)));
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    g_test_ready = true;
+    LOGI("Test triangle initialized");
+}
+
+
 static bool extract_assets(JNIEnv* env, jobject asset_manager_obj, const std::string& dest_dir) {
     AAssetManager* mgr = AAssetManager_fromJava(env, asset_manager_obj);
     if (!mgr) {
@@ -593,8 +762,21 @@ static bool extract_assets(JNIEnv* env, jobject asset_manager_obj, const std::st
             mkdir(parent.c_str(), 0755);
         }
 
-        if (copy_asset_file(mgr, src, dst)) {
+        bool copied = copy_asset_file(mgr, src, dst);
+        if (!copied) {
+            size_t scenic_pos = line.find("/__scenic/");
+            if (scenic_pos != std::string::npos) {
+                std::string alt_line = line;
+                alt_line.replace(scenic_pos, strlen("/__scenic/"), "/scenic/");
+                std::string alt_src = "erlang/" + alt_line;
+                copied = copy_asset_file(mgr, alt_src, dst);
+            }
+        }
+
+        if (copied) {
             count++;
+        } else {
+            LOGE("Missing asset in APK: %s", src.c_str());
         }
     }
 

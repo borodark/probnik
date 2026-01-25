@@ -12,6 +12,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
   alias Probnik.ColorScheme
   import Scenic.Primitives
 
+
   @update_interval 2000
   @header_height 60
   @vsi_max_rate 20
@@ -513,36 +514,6 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     :math.pi() - fraction * @vsi_sweep
   end
 
-  defp maybe_text(graph, "", _color, _size, _x, _y), do: graph
-
-  defp maybe_text(graph, label, color, size, x, y) do
-    graph
-    |> text(label,
-      fill: color,
-    font: :roboto,
-      font_size: size,
-      text_align: :center,
-      translate: {x, y}
-    )
-  end
-
-  defp glow_color(rate, :pos, c) do
-    if rate > 0 do
-      t = ease(min(abs(rate) / @vsi_max_rate, 1.0))
-      warm_glow(t)
-    else
-      c.secondary
-    end
-  end
-
-  defp glow_color(rate, :neg, c) do
-    if rate < 0 do
-      t = ease(min(abs(rate) / @vsi_max_rate, 1.0))
-      warm_glow(t)
-    else
-      c.secondary
-    end
-  end
 
   defp warm_glow(t) do
     # bright orange -> dark red
@@ -584,31 +555,6 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     end
   end
 
-  defp pressure_fill_color(ratio) do
-    t = min(max(ratio, 0.0), 1.0)
-
-    cond do
-      t <= 0.25 ->
-        # black -> green
-        k = t / 0.25
-        {0, trunc(180 * k), 0}
-
-      t <= 0.6 ->
-        # green -> yellow
-        k = (t - 0.25) / 0.35
-        {trunc(255 * k), 180, 0}
-
-      t <= 0.85 ->
-        # yellow -> orange
-        k = (t - 0.6) / 0.25
-        {255, trunc(180 - 80 * k), 0}
-
-      true ->
-        # orange -> dark red
-        k = (t - 0.85) / 0.15
-        {trunc(255 - 120 * k), 0, 0}
-    end
-  end
 
 
   defp draw_rows(graph, _schedulers, _config, _c), do: graph

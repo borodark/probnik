@@ -3,6 +3,10 @@ plugins {
 }
 
 android {
+    androidResources {
+        // Don't ignore Scenic assets stored under __scenic/
+        ignoreAssetsPattern = "!__scenic:!__scenic/**"
+    }
     namespace "com.probnik"
     compileSdk 34
     ndkVersion "25.2.9519653"
@@ -93,6 +97,10 @@ task copyErlangRelease(type: Copy) {
     into "${projectDir}/src/main/assets/erlang"
     include "**/*"
     include ".*"
+    // Rename __scenic directory so Android packaging won't ignore it
+    eachFile { details ->
+        details.path = details.path.replace("/__scenic/", "/scenic/")
+    }
 }
 
 // Clean copied assets when cleaning build

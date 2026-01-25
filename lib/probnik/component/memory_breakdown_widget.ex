@@ -11,7 +11,6 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
 
   @update_interval 2000
   @header_height 60
-  @row_height 52
 
   @impl Scenic.Component
   def validate(opts) when is_list(opts), do: {:ok, opts}
@@ -128,48 +127,6 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
     |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
   end
 
-  defp draw_category_bars(graph, rows, total, config, c) do
-    # Transposed list into vertical bar diagram
-    area_x = 30
-    area_y = @header_height + 70
-    area_width = config.width - 60
-    label_band = 24
-    area_height = config.height - area_y - label_band - 10
-    count = max(length(rows), 1)
-    gap = 14
-    bar_width = max((area_width - gap * (count - 1)) / count, 18)
-
-    rows
-    |> Enum.with_index(0)
-    |> Enum.reduce(graph, fn {row, idx}, g ->
-      ratio = if total > 0, do: row.value / total, else: 0.0
-      bar_h = area_height * ratio
-      color = row_color(row.key, c)
-      x = area_x + idx * (bar_width + gap)
-      y = area_y + (area_height - bar_h)
-      label_y = area_y + area_height + 18
-
-      g
-      |> rect({bar_width, bar_h},
-        fill: color,
-        translate: {x, y}
-      )
-      |> text(row.label,
-        fill: c.primary,
-        font: :courier,
-        font_size: 18,
-        text_align: :center,
-        translate: {x + bar_width / 2, label_y}
-      )
-      |> text(format_mb(row.value),
-        fill: c.secondary,
-        font: :courier,
-        font_size: 16,
-        text_align: :center,
-        translate: {x + bar_width / 2, y - 8}
-      )
-    end)
-  end
 
   defp draw_sorted_bars(graph, rows, total, config, c) do
     # Sorted horizontal bars: biggest on the left, smallest on the right
@@ -221,16 +178,6 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
     end
   end
 
-  defp row_color(key, c) do
-    case key do
-      :processes -> c.primary
-      :ets -> c.warning
-      :binary -> c.accent
-      :code -> c.secondary
-      :other -> c.border
-      _ -> c.secondary
-    end
-  end
 
   defp format_mb(bytes) when is_integer(bytes) do
     mb = bytes / 1024 / 1024
@@ -239,17 +186,4 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
 
   defp format_mb(_), do: "0 MB"
 
-  defp pct(ratio) when is_float(ratio) do
-    :erlang.float_to_binary(ratio * 100, decimals: 1) <> "%"
-  end
-
-  defp pct(_), do: "0%"
-
-  defp dim_color({r, g, b}, factor) do
-    {trunc(r * factor), trunc(g * factor), trunc(b * factor)}
-  end
-
-  defp dim_color({r, g, b, a}, factor) do
-    {trunc(r * factor), trunc(g * factor), trunc(b * factor), a}
-  end
 end

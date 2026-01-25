@@ -11,6 +11,9 @@ defmodule Scenic.Driver.Android do
   require Logger
 
   alias Scenic.ViewPort
+  alias Scenic.Assets.Static
+  alias Scenic.Assets.Stream
+  alias Scenic.Script
 
   @socket_path "/data/data/com.probnik/cache/scenic.sock"
 
@@ -19,6 +22,8 @@ defmodule Scenic.Driver.Android do
   @msg_update_scene 2
   @msg_delete_scripts 3
   @msg_reset 4
+  @msg_put_font 5
+  @msg_put_image 6
 
   @opts_schema [
     name: [type: {:or, [:atom, :string]}],
@@ -39,7 +44,8 @@ defmodule Scenic.Driver.Android do
       Scenic.Driver.assign(driver,
         socket: nil,
         socket_path: socket_path,
-        connected: false
+        connected: false,
+        media: %{fonts: [], images: [], streams: []}
       )
 
     # Try to connect
@@ -52,6 +58,7 @@ defmodule Scenic.Driver.Android do
   def reset_scene(driver) do
     Logger.debug("#{__MODULE__}: reset_scene")
     send_message(driver, @msg_reset, <<>>)
+    driver = Scenic.Driver.assign(driver, :media, %{fonts: [], images: [], streams: []})
     {:ok, driver}
   end
 
@@ -70,17 +77,21 @@ defmodule Scenic.Driver.Android do
   def update_scene(ids, driver) do
     Logger.debug("#{__MODULE__}: update_scene #{inspect(ids)}")
 
-    Enum.each(ids, fn id ->
-      case ViewPort.get_script(driver.viewport, id) do
-        {:ok, script} ->
-          serialized = script |> Scenic.Script.serialize() |> IO.iodata_to_binary()
-          # Native side ignores script id for now; send serialized script only
-          send_message(driver, @msg_update_scene, serialized)
+    driver =
+      Enum.reduce(ids, driver, fn id, driver ->
+        case ViewPort.get_script(driver.viewport, id) do
+          {:ok, script} ->
+            driver = ensure_media(script, driver)
+            script_bin = script |> Script.serialize() |> IO.iodata_to_binary()
+            payload = encode_script(id, script_bin)
+            Logger.info("#{__MODULE__}: script #{inspect(id)} bytes=#{byte_size(script_bin)}")
+            send_message(driver, @msg_update_scene, payload)
+            driver
 
-        {:error, :not_found} ->
-          :ok
-      end
-    end)
+          {:error, :not_found} ->
+            driver
+        end
+      end)
 
     {:ok, driver}
   end
@@ -89,8 +100,10 @@ defmodule Scenic.Driver.Android do
   def del_scripts(ids, driver) do
     Logger.debug("#{__MODULE__}: del_scripts #{inspect(ids)}")
 
-    payload = :erlang.term_to_binary(ids)
-    send_message(driver, @msg_delete_scripts, payload)
+    Enum.each(ids, fn id ->
+      payload = encode_script_id(id)
+      send_message(driver, @msg_delete_scripts, payload)
+    end)
 
     {:ok, driver}
   end
@@ -101,7 +114,7 @@ defmodule Scenic.Driver.Android do
     {:ok, driver}
   end
 
-  @impl Scenic.Driver
+  @impl true
   def handle_info({:tcp, _socket, data}, driver) do
     # Handle input events from Android
     handle_input(data, driver)
@@ -191,4 +204,137 @@ defmodule Scenic.Driver.Android do
   end
 
   defp handle_key_input(_data, _state), do: :ok
+
+  defp ensure_media(script, driver) do
+    media = Script.media(script)
+
+    driver
+    |> ensure_fonts(Map.get(media, :fonts, []))
+    |> ensure_images(Map.get(media, :images, []))
+    |> ensure_streams(Map.get(media, :streams, []))
+  end
+
+  defp ensure_fonts(driver, []), do: driver
+
+  defp ensure_fonts(%{assigns: %{media: media}} = driver, ids) do
+    fonts = Map.get(media, :fonts, [])
+
+    fonts =
+      Enum.reduce(ids, fonts, fn id, fonts ->
+        with false <- Enum.member?(fonts, id),
+             {:ok, {Static.Font, _}} <- Static.meta(id),
+             {:ok, str_hash} <- Static.to_hash(id),
+             {:ok, bin} <- Static.load(id) do
+          send_message(driver, @msg_put_font, encode_font(str_hash, bin))
+          [id | fonts]
+        else
+          _ -> fonts
+        end
+      end)
+
+    Scenic.Driver.assign(driver, :media, Map.put(media, :fonts, fonts))
+  end
+
+  defp ensure_images(driver, []), do: driver
+
+  defp ensure_images(%{assigns: %{media: media}} = driver, ids) do
+    images = Map.get(media, :images, [])
+
+    images =
+      Enum.reduce(ids, images, fn id, images ->
+        with false <- Enum.member?(images, id),
+             {:ok, {Static.Image, {w, h, _}}} <- Static.meta(id),
+             {:ok, str_hash} <- Static.to_hash(id),
+             {:ok, bin} <- Static.load(id) do
+          send_message(driver, @msg_put_image, encode_image(str_hash, :file, w, h, bin))
+          [id | images]
+        else
+          _ -> images
+        end
+      end)
+
+    Scenic.Driver.assign(driver, :media, Map.put(media, :images, images))
+  end
+
+  defp ensure_streams(driver, []), do: driver
+
+  defp ensure_streams(%{assigns: %{media: media}} = driver, ids) do
+    streams = Map.get(media, :streams, [])
+
+    streams =
+      Enum.reduce(ids, streams, fn id, streams ->
+        with false <- Enum.member?(streams, id),
+             :ok <- Stream.subscribe(id) do
+          case Stream.fetch(id) do
+            {:ok, {Stream.Image, {w, h, _format}, bin}} ->
+              send_message(driver, @msg_put_image, encode_image(id, :file, w, h, bin))
+              [id | streams]
+
+            {:ok, {Stream.Bitmap, {w, h, format}, bin}} ->
+              send_message(driver, @msg_put_image, encode_image(id, format, w, h, bin))
+              [id | streams]
+
+            _ ->
+              streams
+          end
+        else
+          _ -> streams
+        end
+      end)
+
+    Scenic.Driver.assign(driver, :media, Map.put(media, :streams, streams))
+  end
+
+  defp encode_script(id, script_bin) do
+    id_bin = encode_id(id)
+    [<<byte_size(id_bin)::unsigned-integer-size(32)-native>>, id_bin, script_bin]
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_script_id(id) do
+    id_bin = encode_id(id)
+    [<<byte_size(id_bin)::unsigned-integer-size(32)-native>>, id_bin]
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_font(name, bin) do
+    [
+      <<byte_size(name)::unsigned-integer-size(32)-native>>,
+      <<byte_size(bin)::unsigned-integer-size(32)-native>>,
+      name,
+      bin
+    ]
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_image(id, format, w, h, bin) do
+    format_id =
+      case format do
+        :file -> 0
+        :g -> 1
+        :ga -> 2
+        :rgb -> 3
+        :rgba -> 4
+        _ -> 0
+      end
+
+    id_bin = encode_id(id)
+
+    [
+      <<
+        byte_size(id_bin)::unsigned-integer-size(32)-native,
+        byte_size(bin)::unsigned-integer-size(32)-native,
+        w::unsigned-integer-size(32)-native,
+        h::unsigned-integer-size(32)-native,
+        format_id::unsigned-integer-size(32)-native
+      >>,
+      id_bin,
+      bin
+    ]
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_id(id) when is_binary(id), do: id
+  defp encode_id(id) when is_atom(id), do: Atom.to_string(id)
+  defp encode_id(id), do: to_string(id)
 end

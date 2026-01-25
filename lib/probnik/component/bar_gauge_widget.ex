@@ -10,6 +10,7 @@ defmodule Probnik.Component.BarGaugeWidget do
   alias Probnik.ColorScheme
   import Scenic.Primitives
 
+
   @update_interval 250
   @header_height 32
   @bar_segments 30  # 3x more segments, skinnier marks
@@ -131,7 +132,7 @@ defmodule Probnik.Component.BarGaugeWidget do
     _ -> nil
   end
 
-  defp extract_type_and_module(pid, info, real_initial_call) do
+  defp extract_type_and_module(_pid, info, real_initial_call) do
     # Try multiple sources for the best name
     # 1. real_initial_call from proc_lib
     # 2. initial_call from info
@@ -336,11 +337,6 @@ defmodule Probnik.Component.BarGaugeWidget do
     end
   end
 
-  defp format_pid(pid) when is_pid(pid) do
-    pid |> inspect() |> String.replace(~r/[<>]/, "")
-  end
-
-  defp format_pid(_), do: "???"
 
   defp detect_type(mod_str, fun) do
     cond do
@@ -532,22 +528,6 @@ defmodule Probnik.Component.BarGaugeWidget do
     )
   end
 
-  defp get_type_color(type, c) do
-    case type do
-      "GEN" -> c.accent      # GenServer
-      "SUP" -> c.warning     # Supervisor
-      "DYN" -> c.warning     # DynamicSupervisor
-      "TSK" -> c.primary     # Task
-      "PHX" -> c.critical    # Phoenix
-      "ECT" -> c.accent      # Ecto
-      "LOG" -> c.secondary   # Logger
-      "TEL" -> c.secondary   # Telemetry
-      "FIN" -> c.accent      # Finch
-      "BAN" -> c.critical    # Bandit
-      "REG" -> c.primary     # Registry
-      _ -> c.secondary
-    end
-  end
 
   # Format value for display in the value column
   defp format_value_display(bytes, :memory) do
