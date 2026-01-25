@@ -30,3 +30,6 @@ iex --sname probnik@localhost --cookie secret_token -S mix scenic.run
 - recon:proc_count/2 for per-process top 5 (memory, msgq)
 - erlang:memory/0 for memory breakdown
 - recon:scheduler_usage/1 + erlang:statistics/1 for scheduler pressure and run queue
+
+## Android build (Path A)
+See `android/README.md` and `android/env.sh` for the current Android setup notes.

@@ -2,35 +2,39 @@ defmodule Probnik.Application do
   @moduledoc false
   use Application
 
-  @target_node :"one@localhost"
-
   @impl true
   def start(_type, _args) do
-    # Connect to target node
-    connect_to_target()
-
     main_viewport_config = Application.get_env(:probnik, :viewport)
+    is_android = is_android?()
 
-    children = [
-      {Scenic, [main_viewport_config]}
-    ]
+    children =
+      if main_viewport_config do
+        [{Scenic, [main_viewport_config]}]
+      else
+        []
+      end
+
+    # Add RemoteNode connection manager on Android
+    children =
+      if is_android do
+        [{Probnik.RemoteNode, []} | children]
+      else
+        children
+      end
 
     opts = [strategy: :one_for_one, name: Probnik.Supervisor]
     Supervisor.start_link(children, opts)
   end
 
-  defp connect_to_target do
-    case Node.connect(@target_node) do
-      true ->
-        IO.puts("Connected to #{@target_node}")
-
-      false ->
-        IO.puts("Failed to connect to #{@target_node}")
-
-      :ignored ->
-        IO.puts("Local node not alive, cannot connect")
-    end
+  defp is_android? do
+    System.get_env("ANDROID_ROOT") != nil or File.exists?("/system/build.prop")
   end
 
-  def target_node, do: @target_node
+  def target_node do
+    if is_android?() do
+      Probnik.RemoteNode.remote_node()
+    else
+      :"one@localhost"
+    end
+  end
 end

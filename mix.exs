@@ -7,7 +7,19 @@ defmodule Probnik.MixProject do
       version: "0.1.0",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      releases: releases()
+    ]
+  end
+
+  defp releases do
+    [
+      android: [
+        include_executables_for: [],
+        include_erts: false,
+        steps: [:assemble],
+        rel_templates_path: "rel/android"
+      ]
     ]
   end
 

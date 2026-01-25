@@ -1,0 +1,17 @@
+## Erlang VM args for Android release
+-mode embedded
+
+## Distributed Erlang - DISABLED until crypto/OpenSSL is built for Android
+## -name probnik@127.0.0.1
+## -setcookie secret_token
+
+## Limit schedulers for mobile
++S 2:2
++SDcpu 2:2
+
+## Memory settings for constrained environment
++MBas aobf
++MBlmbcs 512
+
+## Disable shell (no terminal on Android)
++Bd -noinput
