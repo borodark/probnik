@@ -70,7 +70,7 @@ defmodule Probnik.Component.BarGaugeWidget do
       result when is_list(result) and length(result) > 0 ->
         Enum.map(result, fn {pid, value, info} ->
           real_initial_call = :rpc.call(target, :proc_lib, :initial_call, [pid], 2000)
-          extract_process_info(pid, value, info, real_initial_call)
+          extract_process_info(target, pid, value, info, real_initial_call)
         end)
 
       _ ->
@@ -90,15 +90,19 @@ defmodule Probnik.Component.BarGaugeWidget do
     :recon.proc_count(attribute, 5)
     |> Enum.map(fn {pid, value, info} ->
       real_initial_call = :proc_lib.initial_call(pid)
-      extract_process_info(pid, value, info, real_initial_call)
+      extract_process_info(node(), pid, value, info, real_initial_call)
     end)
   rescue
     _ -> []
   end
 
-  defp extract_process_info(pid, value, info, real_initial_call) do
+  defp extract_process_info(target, pid, value, info, real_initial_call) do
     reg_name = extract_registered_name(info)
-    {proc_type, module_fn} = extract_type_and_module(pid, info, real_initial_call)
+    {proc_type, module_fn, mod} = extract_type_and_module(pid, info, real_initial_call)
+    {module_fn, mod} = maybe_infer_origin(target, pid, module_fn, mod)
+    app = resolve_app(target, mod, module_fn)
+    owner = infer_owner(target, pid)
+    name = build_display_name(app, module_fn, owner)
 
     # Always display Module.Function/Arity
     %{
@@ -107,7 +111,7 @@ defmodule Probnik.Component.BarGaugeWidget do
       type: proc_type,
       registered_name: reg_name,
       module_fn: module_fn,
-      name: module_fn
+      name: name
     }
   end
 
@@ -140,11 +144,11 @@ defmodule Probnik.Component.BarGaugeWidget do
              try_extract_mfa(Keyword.get(info, :initial_call)) ||
              try_extract_mfa(Keyword.get(info, :current_function)) ||
              try_registered_name(info) ||
-             {"PRC", format_pid(pid)}
+             {"UNK", "unknown", nil}
 
     result
   rescue
-    _ -> {"PRC", format_pid(pid)}
+    _ -> {"UNK", "unknown", nil}
   end
 
   defp try_extract_mfa({mod, fun, arity}) when is_atom(mod) and is_atom(fun) do
@@ -156,7 +160,7 @@ defmodule Probnik.Component.BarGaugeWidget do
     else
       module_fn = "#{mod_str}.#{fun}/#{arity}"
       proc_type = detect_type(mod_str, fun)
-      {proc_type, module_fn}
+      {proc_type, module_fn, mod}
     end
   end
 
@@ -166,11 +170,170 @@ defmodule Probnik.Component.BarGaugeWidget do
     case Keyword.get(info, :registered_name) do
       name when is_atom(name) and name != nil ->
         name_str = Atom.to_string(name)
-        {"REG", name_str}
+        {"REG", name_str, nil}
       [name | _] when is_atom(name) ->
-        {"REG", Atom.to_string(name)}
+        {"REG", Atom.to_string(name), nil}
       _ ->
         nil
+    end
+  end
+
+  defp resolve_app(_target, nil, _module_fn), do: nil
+
+  defp resolve_app(target, mod, _module_fn) when is_atom(mod) do
+    case :rpc.call(target, :application, :get_application, [mod], 2000) do
+      {:ok, app} when is_atom(app) -> Atom.to_string(app)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp resolve_app(target, nil, module_fn) when is_binary(module_fn) do
+    mod =
+      module_fn
+      |> String.split(".")
+      |> List.first()
+
+    case mod do
+      nil -> nil
+      "" -> nil
+      mod_str ->
+        mod_atom =
+          cond do
+            String.starts_with?(mod_str, "Elixir.") ->
+              String.to_existing_atom(mod_str)
+
+            String.contains?(mod_str, ".") ->
+              String.to_existing_atom("Elixir." <> mod_str)
+
+            true ->
+              String.to_existing_atom(mod_str)
+          end
+
+        resolve_app(target, mod_atom, module_fn)
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp maybe_infer_origin(_target, _pid, module_fn, mod) when is_atom(mod), do: {module_fn, mod}
+
+  defp maybe_infer_origin(target, pid, module_fn, _mod) when is_binary(module_fn) do
+    if likely_system_mfa?(module_fn) do
+      case infer_mfa_from_process(target, pid) do
+        {m, f, a} when is_atom(m) and is_atom(f) ->
+          mod_str = m |> Atom.to_string() |> String.replace("Elixir.", "")
+          {"#{mod_str}.#{f}/#{a}", m}
+
+        _ ->
+          {module_fn, nil}
+      end
+    else
+      {module_fn, nil}
+    end
+  end
+
+  defp likely_system_mfa?(module_fn) do
+    String.starts_with?(module_fn, "erlang.apply") or
+      String.starts_with?(module_fn, "proc_lib.") or
+      String.starts_with?(module_fn, "gen.") or
+      String.starts_with?(module_fn, "gen_server.") or
+      String.starts_with?(module_fn, "supervisor.")
+  end
+
+  defp infer_mfa_from_process(target, pid) do
+    with {:initial_call, {m, f, a}} when is_atom(m) <- :rpc.call(target, :erlang, :process_info, [pid, :initial_call], 2000),
+         true <- not system_module?(m) do
+      {m, f, a}
+    else
+      _ ->
+        case :rpc.call(target, :erlang, :process_info, [pid, :dictionary], 2000) do
+          {:dictionary, dict} when is_list(dict) ->
+            case Keyword.get(dict, :"$initial_call") do
+              {m, f, a} when is_atom(m) ->
+                if system_module?(m), do: nil, else: {m, f, a}
+              _ ->
+                nil
+            end
+
+          _ ->
+            nil
+        end
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp system_module?(m) do
+    m in [:erlang, :proc_lib, :gen, :gen_server, :supervisor]
+  end
+
+  defp infer_owner(target, pid), do: infer_owner(target, pid, 3)
+
+  defp infer_owner(_target, _pid, depth) when depth <= 0, do: nil
+
+  defp infer_owner(target, pid, depth) do
+    case :rpc.call(target, :erlang, :process_info, [pid, :parent], 2000) do
+      {:parent, p} when is_pid(p) ->
+        case owner_label(target, p) do
+          nil -> infer_owner(target, p, depth - 1)
+          label -> label
+        end
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp owner_label(target, parent_pid) do
+    case :rpc.call(target, :erlang, :process_info, [parent_pid, :registered_name], 2000) do
+      {:registered_name, name} when is_atom(name) and name != nil ->
+        infer_subsystem(Atom.to_string(name))
+
+      _ ->
+        case :rpc.call(target, :erlang, :process_info, [parent_pid, :initial_call], 2000) do
+          {:initial_call, {m, f, a}} when is_atom(m) and is_atom(f) ->
+            mod_str = m |> Atom.to_string() |> String.replace("Elixir.", "")
+            infer_subsystem("#{mod_str}.#{f}/#{a}")
+
+          _ ->
+            nil
+        end
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp infer_subsystem(label) when is_binary(label) do
+    cond do
+      String.contains?(label, "Phoenix") -> "Phoenix"
+      String.contains?(label, "LiveView") -> "LiveView"
+      String.contains?(label, "Liveview") -> "LiveView"
+      String.contains?(label, "Ecto") -> "Ecto"
+      String.contains?(label, "Bandit") -> "Bandit"
+      String.contains?(label, "Cowboy") -> "Cowboy"
+      String.contains?(label, "Ranch") -> "Ranch"
+      String.contains?(label, "Plug") -> "Plug"
+      String.contains?(label, "Finch") -> "Finch"
+      String.contains?(label, "Mint") -> "Mint"
+      String.contains?(label, "Telemetry") -> "Telemetry"
+      true -> label
+    end
+  end
+
+  defp build_display_name(nil, module_fn, nil), do: clean_label(module_fn)
+  defp build_display_name(app, module_fn, nil), do: clean_label("#{app}/#{module_fn}")
+  defp build_display_name(nil, module_fn, owner), do: clean_label("#{module_fn} ← #{owner}")
+  defp build_display_name(app, module_fn, owner), do: clean_label("#{app}/#{module_fn} ← #{owner}")
+
+  defp clean_label(label) when is_binary(label) do
+    if String.contains?(label, "#PID") do
+      "unknown"
+    else
+      label
     end
   end
 
@@ -211,34 +374,39 @@ defmodule Probnik.Component.BarGaugeWidget do
     if String.length(name) <= max_len do
       name
     else
-      # Try to show the most significant part (rightmost module + function)
-      parts = String.split(name, ".")
+      {prefix, rest} =
+        case String.split(name, "/", parts: 2) do
+          [app, rest] -> {"#{app}/", rest}
+          _ -> {"", name}
+        end
 
-      case parts do
-        [single] ->
-          # No dots, just truncate
-          String.slice(single, 0, max_len - 2) <> ".."
+      parts = String.split(rest, ".")
 
-        parts when length(parts) >= 2 ->
-          # Get last two parts (Module.function/arity)
-          [second_last, last] = Enum.take(parts, -2)
-          short = "#{second_last}.#{last}"
+      short =
+        case parts do
+          [single] ->
+            String.slice(single, 0, max_len - 2) <> ".."
 
-          if String.length(short) <= max_len do
-            short
-          else
-            # Still too long, truncate the module part
-            available = max_len - String.length(last) - 3
-            if available > 3 do
-              String.slice(second_last, 0, available) <> "..#{last}"
+          parts when length(parts) >= 2 ->
+            [second_last, last] = Enum.take(parts, -2)
+            candidate = "#{second_last}.#{last}"
+
+            if String.length(prefix) + String.length(candidate) <= max_len do
+              candidate
             else
-              String.slice(name, -max_len + 2, max_len - 2) <> ".."
+              available = max_len - String.length(prefix) - String.length(last) - 3
+              if available > 3 do
+                String.slice(second_last, 0, available) <> "..#{last}"
+              else
+                String.slice(candidate, -max_len + 2, max_len - 2) <> ".."
+              end
             end
-          end
 
-        _ ->
-          String.slice(name, 0, max_len - 2) <> ".."
-      end
+          _ ->
+            String.slice(rest, 0, max_len - 2) <> ".."
+        end
+
+      prefix <> short
     end
   end
 
@@ -307,7 +475,7 @@ defmodule Probnik.Component.BarGaugeWidget do
 
   defp draw_row(graph, proc, idx, max_val, config, c, row_height) do
     y = @header_height + 2 + (idx - 1) * row_height
-    row_inner_height = row_height - 6
+    row_inner_height = row_height - 4
     bar_height = max(row_inner_height - 16, 12)
 
     # Layout: 60% text, 40% meter
@@ -315,11 +483,9 @@ defmodule Probnik.Component.BarGaugeWidget do
     meter_x = text_width
     meter_width = config.width - meter_x - 10
 
-    # Process type (GS, Sup, Task, etc.)
-    type_str = Map.get(proc, :type, "Proc")
 
     # Process name - show registered name or module.function
-    name_str = shorten_name(proc.name, 26)
+    name_str = shorten_name(proc.name, 20)
 
     # Value - GB with 2 decimals for memory
     value_str = format_value_display(proc.value, config.attribute)
@@ -334,31 +500,24 @@ defmodule Probnik.Component.BarGaugeWidget do
     # Color gradient based on ranking
     bar_colors = get_bar_colors(idx, c)
 
-    # Type color based on process type
-    type_color = get_type_color(type_str, c)
+    # Type color based on process type (unused when type label hidden)
+    # type_color = get_type_color(type_str, c)
 
     graph
-    # Type - 5% left
-    |> text(type_str,
-      fill: type_color,
-      font: :courier,
-      font_size: 17,
-      translate: {8, y + row_inner_height / 2 + 6}
-    )
-    # Name - after type
+    # Name - full left area
     |> text(name_str,
       fill: c.primary,
       font: :courier,
-      font_size: 20,
-      translate: {40, y + row_inner_height / 2 + 7}
+      font_size: max(trunc(row_inner_height * 0.45), 14),
+      translate: {8, y + row_inner_height / 2 + 6}
     )
     # Value - in the 10% area before meter
     |> text(value_str,
       fill: c.secondary,
       font: :courier,
-      font_size: 16,
+      font_size: max(trunc(row_inner_height * 0.34), 14),
       text_align: :right,
-      translate: {meter_x - 8, y + row_inner_height / 2 + 6}
+      translate: {meter_x - 6, y + row_inner_height / 2 + 5}
     )
     # Draw bar segments - slimmer to match text height
     |> draw_bar_segments(
