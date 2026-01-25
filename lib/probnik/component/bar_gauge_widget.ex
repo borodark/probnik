@@ -10,7 +10,7 @@ defmodule Probnik.Component.BarGaugeWidget do
   alias Probnik.ColorScheme
   import Scenic.Primitives
 
-  @update_interval 1000
+  @update_interval 250
   @header_height 32
   @bar_segments 30  # 3x more segments, skinnier marks
 
@@ -465,7 +465,7 @@ defmodule Probnik.Component.BarGaugeWidget do
   defp draw_rows(graph, procs, max_val, config, c) do
     visible = Enum.filter(procs, fn p -> (p.value || 0) > 0 end)
     rows_height = config.height - @header_height - 6
-    row_height = if length(visible) > 0, do: rows_height / length(visible), else: 0
+    row_height = rows_height / 5
 
     visible
     |> Enum.with_index(1)
