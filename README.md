@@ -35,5 +35,5 @@ iex --sname probnik@localhost --cookie secret_token -S mix scenic.run
 See `android/README.md` and `android/env.sh` for the current Android setup notes.
 
 ## Screenshots:
+<img width="996" height="2048" alt="image" src="https://github.com/user-attachments/assets/cd727174-9057-445f-8d1f-720ae66fe10a" />
 
-<img width="987" height="1600" alt="image" src="https://github.com/user-attachments/assets/226c9616-fef0-4858-b8d3-5a8f4edd1b35" />
