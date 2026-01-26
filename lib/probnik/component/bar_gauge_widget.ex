@@ -63,26 +63,28 @@ defmodule Probnik.Component.BarGaugeWidget do
   defp fetch_top5(attribute) do
     target = Probnik.Application.target_node()
 
-    result = case :rpc.call(target, :recon, :proc_count, [attribute, 5], 5000) do
-      {:badrpc, reason} ->
-        IO.puts("RPC to #{target} failed: #{inspect(reason)}, using local")
-        fetch_local(attribute)
+    result =
+      if remote_target?(target) do
+        case :rpc.call(target, :recon, :proc_count, [attribute, 5], 5000) do
+          {:badrpc, _reason} ->
+            fetch_local(attribute)
 
-      result when is_list(result) and length(result) > 0 ->
-        Enum.map(result, fn {pid, value, info} ->
-          real_initial_call = :rpc.call(target, :proc_lib, :initial_call, [pid], 2000)
-          extract_process_info(target, pid, value, info, real_initial_call)
-        end)
+          result when is_list(result) and length(result) > 0 ->
+            Enum.map(result, fn {pid, value, info} ->
+              real_initial_call = :rpc.call(target, :proc_lib, :initial_call, [pid], 2000)
+              extract_process_info(target, pid, value, info, real_initial_call)
+            end)
 
-      _ ->
-        IO.puts("RPC returned empty, using local")
+          _ ->
+            fetch_local(attribute)
+        end
+      else
         fetch_local(attribute)
-    end
+      end
 
     result
   rescue
     e ->
-      IO.puts("fetch_top5 error: #{inspect(e)}")
       fetch_local(attribute)
   end
 
@@ -94,6 +96,10 @@ defmodule Probnik.Component.BarGaugeWidget do
     end)
   rescue
     _ -> []
+  end
+
+  defp remote_target?(target) do
+    target != Node.self() and Node.alive?() and Enum.member?(Node.list(), target)
   end
 
   defp extract_process_info(target, pid, value, info, real_initial_call) do

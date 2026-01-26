@@ -10,14 +10,15 @@ if is_android do
   IO.puts("runtime.exs: Android detected, configuring Scenic.Driver.Android")
   # Remote node configuration
   config :probnik,
-    remote_host: "192.168.0.249",
-    remote_node: :"one@192.168.0.249"
+    remote_host: "super-io",
+    remote_node: :"one@super-io",
+    local_node_host: "probnik"
 
   # Scenic viewport configuration
   config :probnik, :viewport,
     name: :main_viewport,
     size: {1080, 1920},
-    default_scene: Probnik.Scene.Main,
+    default_scene: Probnik.Scene.Startup,
     drivers: [
       [
         module: Scenic.Driver.Android,

@@ -7,7 +7,7 @@ config :probnik, color_scheme: :dark_bmw  #:sunny_day
 config :probnik, :viewport,
   name: :main_viewport,
   size: {1668, 2388},  # Portrait orientation
-  default_scene: Probnik.Scene.Main,
+  default_scene: Probnik.Scene.Startup,
   drivers: [
     [
       module: Scenic.Driver.Local,

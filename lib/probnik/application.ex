@@ -14,9 +14,9 @@ defmodule Probnik.Application do
         []
       end
 
-    # Add RemoteNode connection manager on Android
+    # Add RemoteNode connection manager on Android only when explicitly enabled
     children =
-      if is_android do
+      if is_android and remote_enabled?() do
         [{Probnik.RemoteNode, []} | children]
       else
         children
@@ -31,10 +31,17 @@ defmodule Probnik.Application do
   end
 
   def target_node do
-    if is_android?() do
-      Probnik.RemoteNode.remote_node()
-    else
-      :"one@localhost"
+    cond do
+      remote_enabled?() and Probnik.RemoteNode.connected?() ->
+        Probnik.RemoteNode.remote_node()
+
+      true ->
+        Node.self()
     end
+  end
+
+  defp remote_enabled? do
+    Application.get_env(:probnik, :remote_enable, false) or
+      System.get_env("PROBNIK_REMOTE_ENABLE") in ["1", "true", "TRUE", "yes", "YES"]
   end
 end

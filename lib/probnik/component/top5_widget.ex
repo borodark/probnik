@@ -62,23 +62,34 @@ defmodule Probnik.Component.Top5Widget do
   defp fetch_top5(attribute) do
     target = Probnik.Application.target_node()
 
-    case :rpc.call(target, :recon, :proc_count, [attribute, 5], 5000) do
-      {:badrpc, reason} ->
-        IO.puts("RPC to #{target} failed: #{inspect(reason)}")
-        []
+    if remote_target?(target) do
+      case :rpc.call(target, :recon, :proc_count, [attribute, 5], 5000) do
+        {:badrpc, _reason} ->
+          []
 
-      result when is_list(result) ->
-        Enum.map(result, fn {pid, value, info} ->
-          # Get the real initial call like LiveDashboard does
-          real_initial_call = :rpc.call(target, :proc_lib, :initial_call, [pid], 2000)
-          %{pid: pid, value: value, name: extract_name(info, real_initial_call)}
-        end)
+        result when is_list(result) ->
+          Enum.map(result, fn {pid, value, info} ->
+            # Get the real initial call like LiveDashboard does
+            real_initial_call = :rpc.call(target, :proc_lib, :initial_call, [pid], 2000)
+            %{pid: pid, value: value, name: extract_name(info, real_initial_call)}
+          end)
 
-      _ ->
-        []
+        _ ->
+          []
+      end
+    else
+      :recon.proc_count(attribute, 5)
+      |> Enum.map(fn {pid, value, info} ->
+        real_initial_call = :proc_lib.initial_call(pid)
+        %{pid: pid, value: value, name: extract_name(info, real_initial_call)}
+      end)
     end
   rescue
     _ -> []
+  end
+
+  defp remote_target?(target) do
+    target != Node.self() and Node.alive?() and Enum.member?(Node.list(), target)
   end
 
   defp extract_name(info, real_initial_call) when is_list(info) do

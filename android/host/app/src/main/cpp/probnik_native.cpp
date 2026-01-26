@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <errno.h>
+#include <arpa/inet.h>
 #include <cstring>
 #include <vector>
 #include <fstream>
@@ -46,6 +47,7 @@ static int g_client_socket = -1;
 static std::atomic<bool> g_running{false};
 static std::thread g_socket_thread;
 static std::mutex g_render_mutex;
+static std::mutex g_socket_send_mutex;
 static std::atomic<bool> g_logged_first_msg{false};
 static std::deque<std::pair<uint8_t, std::vector<uint8_t>>> g_pending_msgs;
 
@@ -56,6 +58,8 @@ static GLuint g_test_vbo = 0;
 static bool g_test_ready = false;
 static bool g_renderer_ready = false;
 static bool g_has_scene = false;
+
+static void send_input_touch(uint8_t action, float x, float y);
 
 // Forward declarations
 static bool extract_assets(JNIEnv* env, jobject asset_manager, const std::string& dest_dir);
@@ -70,6 +74,7 @@ static bool write_file(const std::string& path, const std::string& content);
 static bool copy_file(const std::string& src, const std::string& dst);
 static void ensure_test_triangle();
 static GLuint compile_shader(GLenum type, const char* src);
+static void ensure_inetrc();
 
 extern "C" {
 
@@ -145,6 +150,7 @@ Java_com_probnik_ProbnikNative_init(JNIEnv* env, jclass clazz,
     make_executable(g_erts_bin + "/erlexec");
     make_executable(g_erts_bin + "/erl_child_setup");
     make_executable(g_erts_bin + "/epmd");
+    make_executable(g_erts_bin + "/inet_gethost");
 
     // Start socket server before BEAM
     start_socket_server();
@@ -153,6 +159,13 @@ Java_com_probnik_ProbnikNative_init(JNIEnv* env, jclass clazz,
     if (!start_beam()) {
         LOGE("Failed to start BEAM!");
     }
+}
+
+JNIEXPORT void JNICALL
+Java_com_probnik_ProbnikNative_onTouch(JNIEnv* env, jclass clazz, jint action, jfloat x, jfloat y) {
+    (void)env;
+    (void)clazz;
+    send_input_touch(static_cast<uint8_t>(action), x, y);
 }
 
 JNIEXPORT void JNICALL
@@ -361,6 +374,37 @@ static void handle_message(uint8_t type, const std::vector<uint8_t>& payload) {
     g_pending_msgs.emplace_back(type, payload);
 }
 
+static uint32_t float_to_be(float f) {
+    union {
+        float f;
+        uint32_t u;
+    } v;
+    v.f = f;
+    return htonl(v.u);
+}
+
+static void send_input_touch(uint8_t action, float x, float y) {
+    std::lock_guard<std::mutex> lock(g_socket_send_mutex);
+    if (g_client_socket < 0) {
+        return;
+    }
+
+    const uint8_t msg_type = 1; // touch input
+    uint8_t buffer[1 + 1 + 4 + 4];
+
+    buffer[0] = msg_type;
+    buffer[1] = action;
+    uint32_t bx = float_to_be(x);
+    uint32_t by = float_to_be(y);
+    memcpy(buffer + 2, &bx, sizeof(uint32_t));
+    memcpy(buffer + 6, &by, sizeof(uint32_t));
+
+    ssize_t sent = send(g_client_socket, buffer, sizeof(buffer), 0);
+    if (sent < 0) {
+        LOGE("Failed to send touch input: %s", strerror(errno));
+    }
+}
+
 static void process_pending_messages() {
     while (!g_pending_msgs.empty()) {
         auto msg = std::move(g_pending_msgs.front());
@@ -482,6 +526,8 @@ static bool start_beam() {
     LOGI("Root dir: %s", root_dir.c_str());
     LOGI("Lib dir: %s", lib_dir.c_str());
 
+    ensure_inetrc();
+
     // Create pipes for stdout/stderr capture
     int stdout_pipe[2];
     int stderr_pipe[2];
@@ -512,6 +558,8 @@ static bool start_beam() {
         setenv("RELEASE_VSN", release_vsn.c_str(), 1);
         setenv("RELEASE_NAME", "probnik", 1);
         setenv("RELEASE_CONFIG_DIR", (releases_dir + "/" + release_vsn).c_str(), 1);
+        std::string inetrc_path = release_tmp + "/inetrc";
+        setenv("ERL_INETRC", inetrc_path.c_str(), 1);
         mkdir(release_tmp.c_str(), 0755);
         std::string release_sys_config = release_tmp + "/probnik-" + release_vsn + ".runtime";
         std::string release_sys_config_file = release_sys_config + ".config";
@@ -608,6 +656,22 @@ static bool copy_asset_file(AAssetManager* mgr, const std::string& asset_path, c
     fclose(out);
     AAsset_close(asset);
     return true;
+}
+
+static void ensure_inetrc() {
+    std::string release_tmp = g_release_root + "/tmp";
+    mkdir(release_tmp.c_str(), 0755);
+    std::string inetrc_path = release_tmp + "/inetrc";
+    std::string content =
+        "{lookup, [file,dns]}.\n"
+        "{host, {192,168,0,249}, [\"super-io\"]}.\n"
+        "{host, {192,168,0,222}, [\"probnik\"]}.\n";
+
+    if (!write_file(inetrc_path, content)) {
+        LOGE("Failed to write inetrc to %s", inetrc_path.c_str());
+    } else {
+        LOGI("inetrc written to %s", inetrc_path.c_str());
+    }
 }
 
 static std::string read_asset_manifest(AAssetManager* mgr) {

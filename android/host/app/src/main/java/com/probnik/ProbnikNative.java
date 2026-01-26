@@ -10,5 +10,6 @@ public class ProbnikNative {
     public static native void init(AssetManager assetManager, String filesDir);
     public static native void resize(int width, int height);
     public static native void render();
+    public static native void onTouch(int action, float x, float y);
     public static native void destroy();
 }

@@ -20,8 +20,13 @@ defmodule Probnik.RemoteNode do
     Logger.info("[RemoteNode] Starting connection manager for #{remote}")
     Logger.info("[RemoteNode] Local node: #{Node.self()}")
     Logger.info("[RemoteNode] Cookie: #{Node.get_cookie()}")
-    send(self(), :connect)
-    {:ok, %{connected: false, attempts: 0, remote_node: remote}}
+    if Node.alive?() do
+      send(self(), :connect)
+      {:ok, %{connected: false, attempts: 0, remote_node: remote}}
+    else
+      Logger.warning("[RemoteNode] Local node not alive; remote connect disabled")
+      {:ok, %{connected: false, attempts: 0, remote_node: remote}}
+    end
   end
 
   @impl true
