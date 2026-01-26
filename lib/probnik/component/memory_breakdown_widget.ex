@@ -177,10 +177,10 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
 
   defp format_mb(bytes) when is_integer(bytes) do
     mb = bytes / 1024 / 1024
-    :erlang.float_to_binary(mb, decimals: 1) <> " MB"
+    Integer.to_string(round(mb))
   end
 
-  defp format_mb(_), do: "0 MB"
+  defp format_mb(_), do: "0"
 
   defp draw_watermark(graph, config, c) do
     s = config.scale

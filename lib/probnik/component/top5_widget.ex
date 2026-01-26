@@ -229,7 +229,7 @@ defmodule Probnik.Component.Top5Widget do
   defp top5_total(procs, :memory) do
     bytes = procs |> Enum.map(&(&1.value || 0)) |> Enum.sum()
     mb = bytes / 1024 / 1024
-    :erlang.float_to_binary(mb, decimals: 1)
+    Integer.to_string(round(mb))
   end
 
   defp top5_total(procs, :message_queue_len) do
@@ -251,8 +251,8 @@ defmodule Probnik.Component.Top5Widget do
   defp format_value(bytes, :memory) do
     cond do
       bytes < 1024 -> "#{bytes} B"
-      bytes < 1024 * 1024 -> "#{Float.round(bytes / 1024, 1)} KB"
-      true -> "#{Float.round(bytes / 1024 / 1024, 1)} MB"
+      bytes < 1024 * 1024 -> "#{round(bytes / 1024)} KB"
+      true -> "#{round(bytes / 1024 / 1024)} MB"
     end
   end
 

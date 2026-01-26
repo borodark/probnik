@@ -526,7 +526,7 @@ defmodule Probnik.Component.BarGaugeWidget do
   # Format value for display in the value column
   defp format_value_display(bytes, :memory) do
     mb = bytes / 1024 / 1024
-    :erlang.float_to_binary(mb, decimals: 2)
+    Integer.to_string(round(mb))
   end
 
   defp format_value_display(count, :message_queue_len) do
@@ -624,7 +624,7 @@ defmodule Probnik.Component.BarGaugeWidget do
   defp top5_total(procs, :memory) do
     bytes = procs |> Enum.map(&(&1.value || 0)) |> Enum.sum()
     mb = bytes / 1024 / 1024
-    :erlang.float_to_binary(mb, decimals: 1)
+    Integer.to_string(round(mb))
   end
 
   defp top5_total(procs, :message_queue_len) do

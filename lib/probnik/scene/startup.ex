@@ -8,6 +8,7 @@ defmodule Probnik.Scene.Startup do
   alias Scenic.Components
 
   alias Probnik.ColorScheme
+  alias Probnik.Discovery
 
   @impl Scenic.Scene
   def init(scene, _params, _opts) do
@@ -19,8 +20,12 @@ defmodule Probnik.Scene.Startup do
       token: "secret_token",
       remote_host: Application.get_env(:probnik, :remote_host, "super-io"),
       remote_node: Application.get_env(:probnik, :remote_node, :"one@super-io"),
-      viewport: {vw, vh}
+      viewport: {vw, vh},
+      discovered: [],
+      scanning: true
     }
+
+    start_discovery(self())
 
     graph =
       Graph.build(font: :courier, font_size: 28)
@@ -42,7 +47,23 @@ defmodule Probnik.Scene.Startup do
     {:noreply, scene}
   end
 
+  def handle_event({:click, {:select_node, host, name}}, _from, scene) do
+    remote_node = :"#{name}@#{host}"
+    state = %{scene.assigns.state | remote_host: host, remote_node: remote_node}
+    graph = rebuild_graph(state)
+    {:noreply, assign(scene, state: state) |> push_graph(graph)}
+  end
+
   def handle_event(_event, _from, scene), do: {:noreply, scene}
+
+  @impl GenServer
+  def handle_info({:discovery_result, nodes}, scene) do
+    state = %{scene.assigns.state | discovered: nodes, scanning: false}
+    graph = rebuild_graph(state)
+    {:noreply, assign(scene, state: state) |> push_graph(graph)}
+  end
+
+  def handle_info(_msg, scene), do: {:noreply, scene}
 
   @impl Scenic.Scene
   def handle_input({:viewport, {:reshape, {w, h}}}, _id, scene) do
@@ -77,27 +98,89 @@ defmodule Probnik.Scene.Startup do
       font_size: 56,
       translate: {padding_x, top}
     )
-    |> text("Remote target",
+    |> text("Discovered nodes",
       fill: c.secondary,
       font: :courier_bold,
       font_size: 32,
       translate: {padding_x, top + 80}
     )
+    |> draw_discovery_list(state, padding_x, top + 130, button_w, button_h, button_styles, c)
+    |> text("Selected",
+      fill: c.secondary,
+      font: :courier_bold,
+      font_size: 28,
+      translate: {padding_x, top + 620}
+    )
     |> text("#{state.remote_node}  (#{state.remote_host})",
       fill: c.primary,
       font: :courier_bold,
-      font_size: 34,
-      translate: {padding_x, top + 140}
+      font_size: 32,
+      translate: {padding_x, top + 670}
     )
-    |> Components.button("Connect to one@super-io",
+    |> Components.button("Connect",
       id: :connect_btn,
       width: button_w,
       height: button_h,
       theme: :primary,
       styles: button_styles,
-      translate: {padding_x, top + 260}
+      translate: {padding_x, top + 760}
     )
   end
+
+  defp draw_discovery_list(graph, state, x, y, w, h, styles, c) do
+    if state.scanning do
+      graph
+      |> text("Scanning LAN for epmd (port 4369)...",
+        fill: c.secondary,
+        font: :courier,
+        font_size: 26,
+        translate: {x, y}
+      )
+    else
+      nodes = state.discovered |> Enum.take(5)
+
+      if nodes == [] do
+        graph
+        |> text("No nodes found. Check LAN + epmd.",
+          fill: c.warning,
+          font: :courier,
+          font_size: 26,
+          translate: {x, y}
+        )
+      else
+        nodes
+        |> Enum.with_index(0)
+        |> Enum.reduce(graph, fn {%{host: host, nodes: names}, idx}, g ->
+          label = Enum.join(names, ", ")
+          name = first_node_name(names)
+          g
+          |> Components.button(label,
+            id: {:select_node, host, name},
+            width: w,
+            height: h,
+            theme: :secondary,
+            styles: styles,
+            translate: {x, y + idx * (h + 20)}
+          )
+        end)
+      end
+    end
+  end
+
+  defp start_discovery(pid) do
+    Task.start(fn ->
+      nodes = Discovery.scan()
+      send(pid, {:discovery_result, nodes})
+    end)
+  end
+
+  defp first_node_name([name | _]) do
+    name
+    |> String.split("@")
+    |> List.first()
+  end
+
+  defp first_node_name(_), do: "unknown"
 
   defp apply_connection(%{token: token, remote_node: remote, remote_host: host}) do
     Logger.info("apply_connection remote=#{inspect(remote)} host=#{inspect(host)} token=#{inspect(token)}")
