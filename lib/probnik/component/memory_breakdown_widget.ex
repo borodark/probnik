@@ -11,6 +11,8 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
 
   @update_interval 2000
   @header_height 60
+  @base_width 1600
+  @base_height 600
 
   @impl Scenic.Component
   def validate(opts) when is_list(opts), do: {:ok, opts}
@@ -22,10 +24,12 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
     height = Keyword.get(opts, :height, 600)
     title = Keyword.get(opts, :title, "MEMORY BREAKDOWN")
 
+    scale = min(width / @base_width, height / @base_height)
     config = %{
       width: width,
       height: height,
-      title: title
+      title: title,
+      scale: scale
     }
 
     data = fetch_data()
@@ -96,48 +100,40 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
   defp build_graph(%{rows: []} = _data, config) do
     c = ColorScheme.current()
 
-    Graph.build(font: :courier, font_size: 22)
-    |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
+    s = config.scale
+    Graph.build(font: :courier, font_size: max(10, round(22 * s)))
+    |> rect({config.width, config.height}, fill: c.bg, stroke: {max(1, round(2 * s)), c.border})
     |> text("No data - check node connection",
       fill: c.warning,
       font: :courier,
-      font_size: 28,
-      translate: {20, config.height / 2}
+      font_size: max(12, round(28 * s)),
+      translate: {20 * s, config.height / 2}
     )
   end
 
   defp build_graph(data, config) do
     c = ColorScheme.current()
 
-    Graph.build(font: :courier, font_size: 24)
-    |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
-    |> draw_header(config, c)
+    s = config.scale
+    Graph.build(font: :courier, font_size: max(12, round(24 * s)))
+    |> rect({config.width, config.height}, fill: c.bg, stroke: {max(1, round(2 * s)), c.border})
     #|> draw_category_bars(data.rows, data.total, config, c)
     |> draw_sorted_bars(data.rows, data.total, config, c)
+    |> draw_watermark(config, c)
   end
-
-  defp draw_header(graph, config, c) do
-    graph
-    |> text(config.title,
-      fill: c.primary,
-      font: :courier,
-      font_size: 32,
-      translate: {20, 50}
-    )
-    |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
-  end
-
 
   defp draw_sorted_bars(graph, rows, total, config, c) do
     # Sorted horizontal bars: biggest on the left, smallest on the right
     sorted = Enum.sort_by(rows, & &1.value, :desc)
-    start_y = @header_height + 16
-    bar_x = 20
-    bar_width = config.width - 40
-    row_height = (config.height - start_y - 12) / max(length(sorted), 1)
-    bar_height = max(row_height * 0.7, 18)
-    label_size = max(trunc(row_height * 0.42), 16)
-    value_size = max(trunc(row_height * 0.36), 14)
+    s = config.scale
+    top_pad = 8 * s
+    start_y = top_pad
+    bar_x = 20 * s
+    bar_width = config.width - 40 * s
+    row_height = (config.height - start_y - 8 * s) / max(length(sorted), 1)
+    bar_height = max(row_height * 0.85, 18 * s)
+    label_size = max(trunc(row_height * 0.8), round(16 * s))
+    value_size = max(trunc(row_height * 0.8), round(14 * s))
 
     sorted
     |> Enum.with_index(0)
@@ -150,20 +146,20 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
       g
       |> rect({fill_w, bar_height},
         fill: color,
-        translate: {bar_x, y + row_height * 0.15}
+        translate: {bar_x, y + row_height * 0.1}
       )
       |> text(row.label,
         fill: {0, 0, 0},
         font: :courier_bold,
         font_size: label_size,
-        translate: {bar_x + 12, y + row_height * 0.6}
+        translate: {bar_x + 12 * s, y + row_height * 0.8}
       )
       |> text(format_mb(row.value),
         fill: c.secondary,
         font: :courier_bold,
         font_size: value_size,
         text_align: :right,
-        translate: {bar_x + bar_width, y + row_height * 0.6}
+        translate: {bar_x + bar_width, y + row_height * 0.8}
       )
     end)
   end
@@ -185,5 +181,27 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
   end
 
   defp format_mb(_), do: "0 MB"
+
+  defp draw_watermark(graph, config, c) do
+    s = config.scale
+    area_w = config.width * 0.4
+    area_h = config.height * 0.4
+    font_size = max(12, round(min(area_w, area_h) * 0.35))
+    x = config.width - 12 * s - config.width * 0.25
+    y = config.height - 12 * s
+    label = "MEM BRKDN"
+
+    graph
+    |> text(label,
+      fill: with_alpha(c.secondary, 80),
+      font: :courier_bold,
+      font_size: font_size,
+      text_align: :right,
+      translate: {x, y}
+    )
+  end
+
+  defp with_alpha({r, g, b}, a), do: {r, g, b, a}
+  defp with_alpha({r, g, b, _}, a), do: {r, g, b, a}
 
 end

@@ -60,6 +60,7 @@ static bool g_renderer_ready = false;
 static bool g_has_scene = false;
 
 static void send_input_touch(uint8_t action, float x, float y);
+static void send_viewport_resize(float width, float height);
 
 // Forward declarations
 static bool extract_assets(JNIEnv* env, jobject asset_manager, const std::string& dest_dir);
@@ -173,6 +174,7 @@ Java_com_probnik_ProbnikNative_resize(JNIEnv* env, jclass clazz, jint width, jin
     g_screen_width = width;
     g_screen_height = height;
     LOGI("resize(%d, %d)", width, height);
+    send_viewport_resize(static_cast<float>(width), static_cast<float>(height));
 
     if (g_renderer_ready) {
         scenic_android_resize(g_screen_width, g_screen_height, 1.0f);
@@ -402,6 +404,27 @@ static void send_input_touch(uint8_t action, float x, float y) {
     ssize_t sent = send(g_client_socket, buffer, sizeof(buffer), 0);
     if (sent < 0) {
         LOGE("Failed to send touch input: %s", strerror(errno));
+    }
+}
+
+static void send_viewport_resize(float width, float height) {
+    std::lock_guard<std::mutex> lock(g_socket_send_mutex);
+    if (g_client_socket < 0) {
+        return;
+    }
+
+    const uint8_t msg_type = 3; // viewport reshape
+    uint8_t buffer[1 + 4 + 4];
+
+    buffer[0] = msg_type;
+    uint32_t bw = float_to_be(width);
+    uint32_t bh = float_to_be(height);
+    memcpy(buffer + 1, &bw, sizeof(uint32_t));
+    memcpy(buffer + 5, &bh, sizeof(uint32_t));
+
+    ssize_t sent = send(g_client_socket, buffer, sizeof(buffer), 0);
+    if (sent < 0) {
+        LOGE("Failed to send resize input: %s", strerror(errno));
     }
 }
 

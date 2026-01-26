@@ -180,6 +180,7 @@ defmodule Scenic.Driver.Android do
     case type do
       1 -> handle_touch_input(rest, state)
       2 -> handle_key_input(rest, state)
+      3 -> handle_resize_input(rest, state)
       _ -> :ok
     end
   end
@@ -204,6 +205,10 @@ defmodule Scenic.Driver.Android do
   end
 
   defp handle_key_input(_data, _state), do: :ok
+
+  defp handle_resize_input(<<w::float-32, h::float-32>>, driver) do
+    Scenic.ViewPort.input(driver.viewport, {:viewport, {:reshape, {w, h}}})
+  end
 
   defp ensure_media(script, driver) do
     media = Script.media(script)

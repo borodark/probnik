@@ -11,8 +11,8 @@ defmodule Probnik.Component.Top5Widget do
   import Scenic.Primitives
 
   @update_interval 1000
-  @row_height 85
-  @header_height 60
+  @base_width 600
+  @base_height 450
 
   @impl Scenic.Component
   def validate(opts) when is_list(opts), do: {:ok, opts}
@@ -26,11 +26,15 @@ defmodule Probnik.Component.Top5Widget do
     attribute = Keyword.get(opts, :attribute, :memory)
     title = Keyword.get(opts, :title, "Top 5")
 
+    scale = min(width / @base_width, height / @base_height)
+    header_h = max(12, round(60 * scale))
     config = %{
       width: width,
       height: height,
       attribute: attribute,
-      title: title
+      title: title,
+      scale: scale,
+      header_height: header_h
     }
 
     procs = fetch_top5(config.attribute)
@@ -127,32 +131,29 @@ defmodule Probnik.Component.Top5Widget do
   defp build_graph(procs, config) do
     c = ColorScheme.current()
 
-    Graph.build(font: :courier, font_size: 36)
-    |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
-    |> draw_header(config, c)
+    s = config.scale
+    Graph.build(font: :courier, font_size: max(12, round(36 * s)))
+    |> rect({config.width, config.height}, fill: c.bg, stroke: {max(1, round(2 * s)), c.border})
     |> draw_rows(procs, config, c)
-  end
-
-  defp draw_header(graph, config, c) do
-    graph
-    |> text(config.title,
-      fill: c.secondary,
-      font_size: 32,
-      translate: {20, 40}
-    )
-    |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
+    |> draw_watermark(config, c, procs)
   end
 
   defp draw_rows(graph, procs, config, c) do
+    s = config.scale
+    top_pad = 8 * s
+    rows_height = config.height - top_pad * 2
+    row_height = rows_height / 5
     procs
     |> Enum.with_index(1)
     |> Enum.reduce(graph, fn {proc, idx}, g ->
-      draw_row(g, proc, idx, config, c)
+      draw_row(g, proc, idx, config, c, row_height)
     end)
   end
 
-  defp draw_row(graph, proc, idx, config, c) do
-    y = @header_height + 10 + (idx - 1) * @row_height
+  defp draw_row(graph, proc, idx, config, c, row_height) do
+    s = config.scale
+    top_pad = 8 * s
+    y = top_pad + (idx - 1) * row_height
 
     # Rank number
     rank_str = "#{idx}."
@@ -176,23 +177,66 @@ defmodule Probnik.Component.Top5Widget do
     # Rank - small, left side
     |> text(rank_str,
       fill: rank_color,
-      font_size: 32,
-      translate: {15, y + 45}
+      font_size: max(12, round(row_height * 0.8)),
+      translate: {15 * s, y + row_height * 0.8}
     )
     # NAME - BIG AND PROMINENT
     |> text(name_str,
       fill: c.primary,
-      font_size: 48,
-      translate: {60, y + 48}
+      font_size: max(12, round(48 * s)),
+      translate: {60 * s, y + row_height * 0.6}
     )
     # Value - smaller, right aligned
     |> text(value_str,
       fill: rank_color,
-      font_size: 32,
+      font_size: max(12, round(row_height * 0.8)),
       text_align: :right,
-      translate: {config.width - 20, y + 45}
+      translate: {config.width - 20 * s, y + row_height * 0.8}
     )
   end
+
+  defp draw_watermark(graph, config, c, procs) do
+    s = config.scale
+    area_w = config.width * 0.4
+    area_h = config.height * 0.4
+    label_font = max(12, round(min(area_w, area_h) * 0.35))
+    value_font = max(10, round(min(area_w, area_h) * 0.2)) * 4
+    x = config.width - 12 * s
+    y = config.height - 12 * s
+    label = if config.attribute == :memory, do: "PROC MEM", else: "PROC MSGQ"
+    value = top5_total(procs, config.attribute)
+
+    graph
+    |> text(value,
+      fill: {255, 140, 0},
+      font: :courier_bold,
+      font_size: value_font,
+      text_align: :right,
+      translate: {x, y - label_font * 2.6}
+    )
+    |> text(label,
+      fill: with_alpha(c.secondary, 80),
+      font: :courier_bold,
+      font_size: label_font,
+      text_align: :right,
+      translate: {x, y}
+    )
+  end
+
+  defp with_alpha({r, g, b}, a), do: {r, g, b, a}
+  defp with_alpha({r, g, b, _}, a), do: {r, g, b, a}
+
+  defp top5_total(procs, :memory) do
+    bytes = procs |> Enum.map(&(&1.value || 0)) |> Enum.sum()
+    mb = bytes / 1024 / 1024
+    :erlang.float_to_binary(mb, decimals: 1)
+  end
+
+  defp top5_total(procs, :message_queue_len) do
+    procs |> Enum.map(&(&1.value || 0)) |> Enum.sum() |> Integer.to_string()
+  end
+
+  defp top5_total(procs, _), do: procs |> Enum.map(&(&1.value || 0)) |> Enum.sum() |> Integer.to_string()
 
   defp truncate(str, max_len) when is_binary(str) do
     if String.length(str) > max_len do

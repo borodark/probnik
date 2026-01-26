@@ -9,6 +9,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
   use Scenic.Component, has_children: false
 
   alias Scenic.Graph
+  alias Scenic.Assets.Static
   alias Probnik.ColorScheme
   import Scenic.Primitives
 
@@ -17,6 +18,8 @@ defmodule Probnik.Component.SchedulerPressureWidget do
   @header_height 60
   @vsi_max_rate 20
   @vsi_sweep :math.pi() * 5 / 6
+  @base_width 1600
+  @base_height 600
 
   @impl Scenic.Component
   def validate(opts) when is_list(opts), do: {:ok, opts}
@@ -28,10 +31,18 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     height = Keyword.get(opts, :height, 600)
     title = Keyword.get(opts, :title, "SCHEDULER PRESSURE")
 
+    sx = width / @base_width
+    sy = height / @base_height
+    s = min(sx, sy)
+    header_h = max(12, round(@header_height * sy))
     config = %{
       width: width,
       height: height,
-      title: title
+      title: title,
+      sx: sx,
+      sy: sy,
+      s: s,
+      header_height: header_h
     }
 
     data = fetch_data()
@@ -207,22 +218,12 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     {avg_usage, _max_usage} = usage_stats(schedulers)
     {avg_rq, max_rq, min_rq} = run_queue_stats(schedulers, data.run_queue_total)
 
-    Graph.build(font: :courier, font_size: 24)
-    |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
-    |> draw_header(config, c)
+    s = config.s
+    Graph.build(font: :courier, font_size: max(12, round(24 * s)))
+    |> rect({config.width, config.height}, fill: c.bg, stroke: {max(1, round(2 * s)), c.border})
     |> draw_info(data, config, avg_usage, avg_rq, max_rq, min_rq, pressure, runq_rate, glow_intensity, c)
     |> draw_rows([], config, c)
-  end
-
-  defp draw_header(graph, config, c) do
-    graph
-    |> text(config.title,
-      fill: c.primary,
-      font: :courier,
-      font_size: 32,
-      translate: {20, 50}
-    )
-    |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
+    |> draw_watermark(config, c)
   end
 
   defp draw_info(graph, data, config, avg_usage, avg_rq, max_rq, min_rq, pressure, runq_rate, glow_intensity, c) do
@@ -273,10 +274,13 @@ defmodule Probnik.Component.SchedulerPressureWidget do
 
   defp draw_tape_gauge(graph, data, avg_usage, avg_rq, rq_skew, pressure, runq_rate, glow_intensity, config, c) do
     # Horizontal VU-style meter with needle
-    x = 20
-    y = @header_height + 6
-    height = config.height - y - 6
-    width = config.width - 40
+    sx = config.sx
+    sy = config.sy
+    s = config.s
+    x = 20 * sx
+    y = 8 * sy
+    height = config.height - y - 8 * sy
+    width = config.width - 40 * sx
     ratio = min(max(pressure, 0.0), 1.0)
     needle_x = x + width * ratio
     rq_ratio = min(data.run_queue_total / max(data.schedulers_online, 1) / 4, 1.0)
@@ -285,32 +289,27 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     graph
     |> draw_pressure_fill(x, y, width, height, ratio)
     #|> draw_vsi_texts(x + 10, y, 140, height, runq_rate, c)
-    |> draw_vsi_circle(x + 320, y + height / 2, 200, runq_rate, glow_intensity, c)
+    |> draw_vsi_circle(x + 320 * sx, y + height / 2, 200 * s, runq_rate, glow_intensity, config, c)
     |> text("RunQ #{data.run_queue_total}",
       fill: runq_glow_color(rq_ratio),
       font: :courier,
-      font_size: 48,
-      translate: {x + 12, y + 32}
+      font_size: max(12, round(48 * s)),
+      translate: {x + 12 * sx, y + 32 * sy}
     )
     |> text("avg #{format_float(avg_rq, 1)}",
       fill: runq_glow_color(rq_ratio),
       font: :courier,
-      font_size: 48,
-      translate: {x + 12, y + 78}
+      font_size: max(12, round(48 * s)),
+      translate: {x + 12 * sx, y + 78 * sy}
     )
     |> text("skew #{rq_skew}",
       fill: runq_glow_color(rq_ratio),
       font: :courier,
-      font_size: 48,
-      translate: {x + 12, y + 460}
+      font_size: max(12, round(48 * s)),
+      translate: {x + 12 * sx, y + 460 * sy}
     )
-    |> text("util #{pct(usage_ratio)}",
-      fill: runq_glow_color(rq_ratio),
-      font: :courier,
-      font_size: 48,
-      translate: {x + 12, y + 500}
-    )
-    |> line({{needle_x, y - 6}, {needle_x, y + height + 6}}, stroke: {3, c.needle})
+    |> draw_util_value(usage_ratio, x, width, ratio, config, c)
+    |> line({{needle_x, y - 6 * sy}, {needle_x, y + height + 6 * sy}}, stroke: {max(1, round(3 * s)), c.needle})
   end
 
   defp draw_pressure_fill(graph, x, y, width, height, ratio) do
@@ -362,36 +361,37 @@ defmodule Probnik.Component.SchedulerPressureWidget do
   #  |> maybe_text(neg_val, neg_color, font_size, x + width / 2, y + half + half / 2 + font_size / 3)
   #end
 
-  defp draw_vsi_circle(graph, cx, cy, radius, rate, glow_intensity, c) do
+  defp draw_vsi_circle(graph, cx, cy, radius, rate, glow_intensity, config, c) do
+    s = config.s
     clamped = max(-@vsi_max_rate, min(@vsi_max_rate, rate))
     direction = if clamped >= 0, do: :up, else: :down
     angle = vsi_value_to_angle(abs(clamped), direction)
 
-    needle_len = radius - 6
+    needle_len = radius - 6 * s
     x2 = cx + :math.cos(angle) * needle_len
     y2 = cy + :math.sin(angle) * needle_len
 
     graph
-    |> draw_vsi_afterglow(cx, cy, radius, glow_intensity)
-    |> circle(radius, stroke: {2, c.tick}, translate: {cx, cy})
-    |> draw_vsi_ticks(cx, cy, radius, c)
-    |> line({{cx, cy}, {x2, y2}}, stroke: {3, c.needle}, cap: :round)
-    |> circle(3, fill: c.needle, translate: {cx, cy})
+    |> draw_vsi_afterglow(cx, cy, radius, glow_intensity, s)
+    |> circle(radius, stroke: {max(1, round(2 * s)), c.tick}, translate: {cx, cy})
+    |> draw_vsi_ticks(cx, cy, radius, s, c)
+    |> line({{cx, cy}, {x2, y2}}, stroke: {max(1, round(3 * s)), c.needle}, cap: :round)
+    |> circle(max(1, round(3 * s)), fill: c.needle, translate: {cx, cy})
     |> text(vsi_signed_value(rate),
       fill: {0, 0, 0},
       font: :roboto,
-      font_size: 64,
+      font_size: max(12, round(64 * s)),
       text_align: :center,
       translate: {cx, cy - radius * 0.3}
     )
     |> text("Δ runq/sec",
       fill: {0, 0, 0},
       font: :courier_bold,
-      font_size: 32,
+      font_size: max(10, round(32 * s)),
       text_align: :center,
       translate: {cx, cy + radius * 0.45}
     )
-    |> draw_vsi_chevrons(cx, cy, radius, rate, c)
+    |> draw_vsi_chevrons(cx, cy, radius, rate, s, c)
   end
 
   defp vsi_signed_value(rate) when is_number(rate) do
@@ -399,21 +399,21 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     if value > 0, do: "+#{value}", else: Integer.to_string(value)
   end
 
-  defp draw_vsi_afterglow(graph, _cx, _cy, _radius, glow) when glow <= 0.0, do: graph
+  defp draw_vsi_afterglow(graph, _cx, _cy, _radius, glow, _s) when glow <= 0.0, do: graph
 
-  defp draw_vsi_afterglow(graph, cx, cy, radius, glow) do
+  defp draw_vsi_afterglow(graph, cx, cy, radius, glow, s) do
     color = warm_glow(0.6)
     alpha1 = trunc(40 + glow * 140)
     alpha2 = trunc(20 + glow * 90)
     alpha3 = trunc(10 + glow * 60)
 
     graph
-    |> circle(radius + 10, stroke: {2, with_alpha(color, alpha1)}, translate: {cx, cy})
-    |> circle(radius + 18, stroke: {2, with_alpha(color, alpha2)}, translate: {cx, cy})
-    |> circle(radius + 26, stroke: {2, with_alpha(color, alpha3)}, translate: {cx, cy})
+    |> circle(radius + 10 * s, stroke: {max(1, round(2 * s)), with_alpha(color, alpha1)}, translate: {cx, cy})
+    |> circle(radius + 18 * s, stroke: {max(1, round(2 * s)), with_alpha(color, alpha2)}, translate: {cx, cy})
+    |> circle(radius + 26 * s, stroke: {max(1, round(2 * s)), with_alpha(color, alpha3)}, translate: {cx, cy})
   end
 
-  defp draw_vsi_chevrons(graph, cx, cy, radius, rate, c) do
+  defp draw_vsi_chevrons(graph, cx, cy, radius, rate, s, c) do
     t = min(abs(rate) / @vsi_max_rate, 1.0)
     up_color = if rate > 0, do: warm_glow(t), else: c.tick
     down_color = if rate < 0, do: warm_glow(t), else: c.tick
@@ -421,15 +421,15 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     phase = rem(now_ms(), 1000) / 1000
 
     up_chevrons = [
-      {cy - radius + 28, 9},
-      {cy - radius + 8, 11},
-      {cy - radius - 12, 13}
+      {cy - radius + 28 * s, 9 * s},
+      {cy - radius + 8 * s, 11 * s},
+      {cy - radius - 12 * s, 13 * s}
     ]
 
     down_chevrons = [
-      {cy + radius - 28, 9},
-      {cy + radius - 8, 11},
-      {cy + radius + 12, 13}
+      {cy + radius - 28 * s, 9 * s},
+      {cy + radius - 8 * s, 11 * s},
+      {cy + radius + 12 * s, 13 * s}
     ]
 
     graph
@@ -468,31 +468,90 @@ defmodule Probnik.Component.SchedulerPressureWidget do
   defp with_alpha({r, g, b}, a), do: {r, g, b, a}
   defp with_alpha({r, g, b, _}, a), do: {r, g, b, a}
 
-  defp draw_chevron(graph, cx, cy, size, :up, color) do
+  defp draw_watermark(graph, config, c) do
+    area_w = config.width * 0.4
+    area_h = config.height * 0.4
+    font_size = max(12, round(min(area_w, area_h) * 0.35))
+    x = config.width - 12 * config.s
+    y = config.height - 12 * config.s
+    label = "SCHED UTIL"
+
     graph
-    |> line({{cx - size, cy + size}, {cx, cy}}, stroke: {5, color}, cap: :round)
-    |> line({{cx, cy}, {cx + size, cy + size}}, stroke: {5, color}, cap: :round)
+    |> text(label,
+      fill: with_alpha(c.secondary, 80),
+      font: :courier_bold,
+      font_size: font_size,
+      text_align: :right,
+      translate: {x, y}
+    )
+  end
+
+  defp draw_util_value(graph, usage_ratio, tape_x, tape_w, ratio, config, _c) do
+    area_w = config.width * 0.4
+    area_h = config.height * 0.4
+    label_font = max(10, round(min(area_w, area_h) * 0.2))
+    value_font = label_font * 4
+    x_label = config.width - 12 * config.s
+    y_label = config.height - 12 * config.s
+    x_value = max(0, x_label - label_font * 1.5)
+    y_value = max(0, y_label - label_font * 2.6)
+    value = pct(usage_ratio)
+    fill_limit = tape_x + tape_w * ratio
+    draw_util_value_chars(graph, value, value_font, x_value, y_value, fill_limit)
+  end
+
+  defp draw_util_value_chars(graph, value, font_size, right_x, y, fill_limit) do
+    {:ok, {Static.Font, fm}} = Static.meta(:courier_bold)
+    total_w = FontMetrics.width(value, font_size, fm)
+    start_x = right_x - total_w
+
+    value
+    |> String.graphemes()
+    |> Enum.reduce({graph, start_x}, fn ch, {g, x} ->
+      w = FontMetrics.width(ch, font_size, fm)
+      color = if fill_limit >= x, do: {0, 0, 0}, else: {255, 140, 0}
+
+      g =
+        g
+        |> text(ch,
+          fill: color,
+          font: :courier_bold,
+          font_size: font_size,
+          translate: {x, y}
+        )
+
+      {g, x + w}
+    end)
+    |> elem(0)
+  end
+
+  defp draw_chevron(graph, cx, cy, size, :up, color) do
+    stroke_w = max(1, round(5 * size / 11))
+    graph
+    |> line({{cx - size, cy + size}, {cx, cy}}, stroke: {stroke_w, color}, cap: :round)
+    |> line({{cx, cy}, {cx + size, cy + size}}, stroke: {stroke_w, color}, cap: :round)
   end
 
   defp draw_chevron(graph, cx, cy, size, :down, color) do
+    stroke_w = max(1, round(5 * size / 11))
     graph
-    |> line({{cx - size, cy - size}, {cx, cy}}, stroke: {5, color}, cap: :round)
-    |> line({{cx, cy}, {cx + size, cy - size}}, stroke: {5, color}, cap: :round)
+    |> line({{cx - size, cy - size}, {cx, cy}}, stroke: {stroke_w, color}, cap: :round)
+    |> line({{cx, cy}, {cx + size, cy - size}}, stroke: {stroke_w, color}, cap: :round)
   end
 
-  defp draw_vsi_ticks(graph, cx, cy, radius, c) do
+  defp draw_vsi_ticks(graph, cx, cy, radius, s, c) do
     values = [0, 10, 20]
 
     Enum.reduce(values, graph, fn v, g ->
       g
-      |> draw_vsi_tick(cx, cy, radius, v, :up, c)
-      |> draw_vsi_tick(cx, cy, radius, v, :down, c)
+      |> draw_vsi_tick(cx, cy, radius, v, :up, s, c)
+      |> draw_vsi_tick(cx, cy, radius, v, :down, s, c)
     end)
   end
 
-  defp draw_vsi_tick(graph, cx, cy, radius, value, direction, c) do
+  defp draw_vsi_tick(graph, cx, cy, radius, value, direction, s, c) do
     angle = vsi_value_to_angle(value, direction)
-    inner = radius - 6
+    inner = radius - 6 * s
     outer = radius
 
     x1 = cx + :math.cos(angle) * inner
@@ -501,7 +560,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     y2 = cy + :math.sin(angle) * outer
 
     graph
-    |> line({{x1, y1}, {x2, y2}}, stroke: {2, c.tick}, cap: :round)
+    |> line({{x1, y1}, {x2, y2}}, stroke: {max(1, round(2 * s)), c.tick}, cap: :round)
   end
 
   defp vsi_value_to_angle(value, :up) do

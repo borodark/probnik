@@ -14,6 +14,8 @@ defmodule Probnik.Component.BarGaugeWidget do
   @update_interval 250
   @header_height 32
   @bar_segments 30  # 3x more segments, skinnier marks
+  @base_width 1600
+  @base_height 600
 
   @impl Scenic.Component
   def validate(opts) when is_list(opts), do: {:ok, opts}
@@ -27,11 +29,13 @@ defmodule Probnik.Component.BarGaugeWidget do
     attribute = Keyword.get(opts, :attribute, :memory)
     title = Keyword.get(opts, :title, "Top 5")
 
+    scale = min(width / @base_width, height / @base_height)
     config = %{
       width: width,
       height: height,
       attribute: attribute,
-      title: title
+      title: title,
+      scale: scale
     }
 
     procs = fetch_top5(config.attribute)
@@ -420,52 +424,32 @@ defmodule Probnik.Component.BarGaugeWidget do
     # Find max value for scaling bars
     max_val = procs |> Enum.map(& &1.value) |> Enum.max(fn -> 1 end)
 
-    Graph.build(font: :courier, font_size: 30)
-    |> rect({config.width, config.height}, fill: c.bg, stroke: {3, c.border})
-    |> draw_header(config, c)
+    s = config.scale
+    border_w = max(1, round(3 * s))
+
+    Graph.build(font: :courier, font_size: max(12, round(30 * s)))
+    |> rect({config.width, config.height}, fill: c.bg, stroke: {border_w, c.border})
     |> draw_rows(procs, max_val, config, c)
-  end
-
-  defp draw_header(graph, config, c) do
-    # Column header for value (MB for memory, count for msgq)
-    value_header = if config.attribute == :memory, do: "MB", else: "Cnt"
-
-    # Layout: 5% type, 35% name, 10% value, 50% meter
-    type_width = config.width * 0.05
-    name_width = config.width * 0.35
-    value_x = type_width + name_width + config.width * 0.1
-
-    graph
-    |> text(config.title,
-      fill: c.primary,
-      font: :courier,
-      font_size: 26,
-      translate: {type_width + 5, 28}
-    )
-    |> text(value_header,
-      fill: c.secondary,
-      font: :courier,
-      font_size: 17,
-      text_align: :right,
-      translate: {value_x - 10, 28}
-    )
-    |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
+    |> draw_watermark(config, c, procs)
   end
 
   defp draw_rows(graph, [], _max_val, config, c) do
     # Show message when no data
+    s = config.scale
     graph
     |> text("No data - check node connection",
       fill: c.warning,
       font: :courier,
-      font_size: 26,
-      translate: {config.width / 2 - 250, config.height / 2}
+      font_size: max(12, round(26 * s)),
+      translate: {config.width / 2 - 250 * s, config.height / 2}
     )
   end
 
   defp draw_rows(graph, procs, max_val, config, c) do
+    s = config.scale
     visible = Enum.filter(procs, fn p -> (p.value || 0) > 0 end)
-    rows_height = config.height - @header_height - 6
+    top_pad = 8 * s
+    rows_height = config.height - top_pad * 2
     row_height = rows_height / 5
 
     visible
@@ -476,14 +460,16 @@ defmodule Probnik.Component.BarGaugeWidget do
   end
 
   defp draw_row(graph, proc, idx, max_val, config, c, row_height) do
-    y = @header_height + 2 + (idx - 1) * row_height
-    row_inner_height = row_height - 4
-    bar_height = max(row_inner_height - 16, 12)
+    s = config.scale
+    top_pad = 8 * s
+    y = top_pad + (idx - 1) * row_height
+    row_inner_height = row_height - 4 * s
+    bar_height = max(row_inner_height - 16 * s, 12 * s)
 
     # Layout: 60% text, 40% meter
     text_width = config.width * 0.6
     meter_x = text_width
-    meter_width = config.width - meter_x - 10
+    meter_width = config.width - meter_x - 10 * s
 
 
     # Process name - show registered name or module.function
@@ -497,7 +483,8 @@ defmodule Probnik.Component.BarGaugeWidget do
 
     # Bar dimensions - full height, skinny segments
     segment_width = meter_width / @bar_segments
-    segment_gap = 2
+    segment_gap = max(1, round(2 * s))
+    corner_radius = max(1, round(4 * s))
 
     # Color gradient based on ranking
     bar_colors = get_bar_colors(idx, c)
@@ -510,25 +497,26 @@ defmodule Probnik.Component.BarGaugeWidget do
     |> text(name_str,
       fill: c.primary,
       font: :courier,
-      font_size: max(trunc(row_inner_height * 0.45), 14),
-      translate: {8, y + row_inner_height / 2 + 6}
+      font_size: max(trunc(row_inner_height * 0.45), round(14 * s)),
+      translate: {8 * s, y + row_inner_height / 2 + 6 * s}
     )
     # Value - in the 10% area before meter
     |> text(value_str,
       fill: {255, 180, 0},
       font: :courier_bold,
-      font_size: max(trunc(row_inner_height * 0.5), 18),
+      font_size: max(trunc(row_inner_height * 0.8), round(18 * s)),
       text_align: :right,
-      translate: {meter_x - 4, y + row_inner_height / 2 + 4}
+      translate: {meter_x - 4 * s, y + row_inner_height * 0.85}
     )
     # Draw bar segments - slimmer to match text height
     |> draw_bar_segments(
       meter_x,
-      y + (row_inner_height - bar_height) / 2 + 4,
+      y + (row_inner_height - bar_height) / 2 + 4 * s,
       segment_width,
       segment_gap,
       bar_height,
       ratio,
+      corner_radius,
       bar_colors,
       c
     )
@@ -547,7 +535,7 @@ defmodule Probnik.Component.BarGaugeWidget do
 
   defp format_value_display(value, _), do: inspect(value)
 
-  defp draw_bar_segments(graph, bar_x, bar_y, segment_width, gap, height, ratio, colors, c) do
+  defp draw_bar_segments(graph, bar_x, bar_y, segment_width, gap, height, ratio, corner_radius, colors, c) do
     active_segments = trunc(ratio * @bar_segments)
 
     Enum.reduce(0..(@bar_segments - 1), graph, fn i, g ->
@@ -564,7 +552,7 @@ defmodule Probnik.Component.BarGaugeWidget do
         end
 
       g
-      |> rrect({segment_width - gap, height, 4},
+      |> rrect({segment_width - gap, height, corner_radius},
         fill: fill,
         translate: {x, bar_y}
       )
@@ -601,4 +589,47 @@ defmodule Probnik.Component.BarGaugeWidget do
   defp dim_color({r, g, b, a}, factor) do
     {trunc(r * factor), trunc(g * factor), trunc(b * factor), a}
   end
+
+  defp draw_watermark(graph, config, c, procs) do
+    s = config.scale
+    area_w = config.width * 0.4
+    area_h = config.height * 0.4
+    label_font = max(12, round(min(area_w, area_h) * 0.35))
+    value_font = max(10, round(min(area_w, area_h) * 0.2)) * 4
+    x = config.width - 12 * s
+    y = config.height - 12 * s
+    label = if config.attribute == :memory, do: "PROC MEM", else: "PROC MSGQ"
+    value = top5_total(procs, config.attribute)
+
+    graph
+    |> text(value,
+      fill: {255, 140, 0},
+      font: :courier_bold,
+      font_size: value_font,
+      text_align: :right,
+      translate: {x, y - label_font * 2.6}
+    )
+    |> text(label,
+      fill: with_alpha(c.secondary, 80),
+      font: :courier_bold,
+      font_size: label_font,
+      text_align: :right,
+      translate: {x, y}
+    )
+  end
+
+  defp with_alpha({r, g, b}, a), do: {r, g, b, a}
+  defp with_alpha({r, g, b, _}, a), do: {r, g, b, a}
+
+  defp top5_total(procs, :memory) do
+    bytes = procs |> Enum.map(&(&1.value || 0)) |> Enum.sum()
+    mb = bytes / 1024 / 1024
+    :erlang.float_to_binary(mb, decimals: 1)
+  end
+
+  defp top5_total(procs, :message_queue_len) do
+    procs |> Enum.map(&(&1.value || 0)) |> Enum.sum() |> Integer.to_string()
+  end
+
+  defp top5_total(procs, _), do: procs |> Enum.map(&(&1.value || 0)) |> Enum.sum() |> Integer.to_string()
 end
