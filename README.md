@@ -1,5 +1,15 @@
 # Probnik (Erlang/BEAM Node Health Monitor)
 
+
+## Android running this Scenic app.
+
+
+I | II
+--- | ---
+![uno](./assets/android-I.jpeg) | ![dos](./assets/android-poc.jpeg)
+
+
+##
 Run:
 ```
 iex --sname probnik@localhost --cookie secret_token -S mix scenic.run
