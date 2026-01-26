@@ -203,17 +203,12 @@ defmodule Probnik.Component.Top5Widget do
     value_font = max(10, round(min(area_w, area_h) * 0.2)) * 4
     x = config.width - 12 * s
     y = config.height - 12 * s
-    label = if config.attribute == :memory, do: "PROC MEM", else: "PROC MSGQ"
+    label = if config.attribute == :memory, do: "PROC MEM MB", else: "PROC MSGQ"
     value = top5_total(procs, config.attribute)
+    fill_limit = top5_fill_limit(procs, config)
 
     graph
-    |> text(value,
-      fill: {255, 140, 0},
-      font: :courier_bold,
-      font_size: value_font,
-      text_align: :right,
-      translate: {x, y - label_font * 2.6}
-    )
+    |> draw_inverted_value(value, value_font, x, y - label_font * 2.6, fill_limit)
     |> text(label,
       fill: with_alpha(c.secondary, 80),
       font: :courier_bold,
@@ -225,6 +220,58 @@ defmodule Probnik.Component.Top5Widget do
 
   defp with_alpha({r, g, b}, a), do: {r, g, b, a}
   defp with_alpha({r, g, b, _}, a), do: {r, g, b, a}
+
+  defp draw_inverted_value(graph, value, font_size, right_x, y, fill_limit) do
+    {:ok, {Scenic.Assets.Static.Font, fm}} = Scenic.Assets.Static.meta(:courier_bold)
+    total_w = FontMetrics.width(value, font_size, fm)
+    start_x = right_x - total_w
+
+    value
+    |> String.graphemes()
+    |> Enum.reduce({graph, start_x}, fn ch, {g, x} ->
+      w = FontMetrics.width(ch, font_size, fm)
+      color = if fill_limit >= x + w / 2, do: {0, 0, 0}, else: {255, 140, 0}
+
+      g =
+        g
+        |> text(ch,
+          fill: color,
+          font: :courier_bold,
+          font_size: font_size,
+          translate: {x, y}
+        )
+
+      {g, x + w}
+    end)
+    |> elem(0)
+  end
+
+  defp top5_fill_limit(procs, config) do
+    s = config.scale
+    top_pad = 8 * s
+    rows_height = config.height - top_pad * 2
+    row_height = rows_height / 5
+    _row_inner_height = row_height - 4 * s
+
+    max_val =
+      procs
+      |> Enum.map(&(&1.value || 0))
+      |> Enum.max(fn -> 1 end)
+
+    top =
+      procs
+      |> List.first()
+
+    ratio =
+      case top do
+        nil -> 0.0
+        proc -> if max_val > 0, do: proc.value / max_val, else: 0.0
+      end
+
+    # Approximate fill using full widget width since Top5 lacks bars
+    fill_limit = config.width * ratio
+    max(fill_limit, 0.0)
+  end
 
   defp top5_total(procs, :memory) do
     bytes = procs |> Enum.map(&(&1.value || 0)) |> Enum.sum()

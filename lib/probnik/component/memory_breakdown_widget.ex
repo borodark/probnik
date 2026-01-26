@@ -6,6 +6,7 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
   use Scenic.Component, has_children: false
 
   alias Scenic.Graph
+  alias Scenic.Assets.Static
   alias Probnik.ColorScheme
   import Scenic.Primitives
 
@@ -148,18 +149,23 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
         fill: color,
         translate: {bar_x, y + row_height * 0.1}
       )
-      |> text(row.label,
-        fill: {0, 0, 0},
-        font: :courier_bold,
-        font_size: label_size,
-        translate: {bar_x + 12 * s, y + row_height * 0.8}
+      |> draw_inverted_left_text(
+        row.label,
+        :courier_bold,
+        label_size,
+        bar_x + 12 * s,
+        y + row_height * 0.8,
+        bar_x + fill_w,
+        c.secondary
       )
-      |> text(format_mb(row.value),
-        fill: c.secondary,
-        font: :courier_bold,
-        font_size: value_size,
-        text_align: :right,
-        translate: {bar_x + bar_width, y + row_height * 0.8}
+      |> draw_inverted_right_text(
+        format_mb(row.value),
+        :courier_bold,
+        value_size,
+        bar_x + bar_width,
+        y + row_height * 0.8,
+        bar_x + fill_w,
+        c.secondary
       )
     end)
   end
@@ -189,7 +195,7 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
     font_size = max(12, round(min(area_w, area_h) * 0.35))
     x = config.width - 12 * s - config.width * 0.25
     y = config.height - 12 * s
-    label = "MEM BRKDN"
+    label = "MEM BRKDN MB"
 
     graph
     |> text(label,
@@ -203,5 +209,53 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
 
   defp with_alpha({r, g, b}, a), do: {r, g, b, a}
   defp with_alpha({r, g, b, _}, a), do: {r, g, b, a}
+
+  defp draw_inverted_left_text(graph, text, font, font_size, x, y, fill_limit, base_color) do
+    {:ok, {Static.Font, fm}} = Static.meta(font)
+
+    text
+    |> String.graphemes()
+    |> Enum.reduce({graph, x}, fn ch, {g, cx} ->
+      w = FontMetrics.width(ch, font_size, fm)
+      color = if fill_limit >= cx + w / 2, do: {0, 0, 0}, else: base_color
+
+      g =
+        g
+        |> text(ch,
+          fill: color,
+          font: font,
+          font_size: font_size,
+          translate: {cx, y}
+        )
+
+      {g, cx + w}
+    end)
+    |> elem(0)
+  end
+
+  defp draw_inverted_right_text(graph, text, font, font_size, right_x, y, fill_limit, base_color) do
+    {:ok, {Static.Font, fm}} = Static.meta(font)
+    total_w = FontMetrics.width(text, font_size, fm)
+    start_x = right_x - total_w
+
+    text
+    |> String.graphemes()
+    |> Enum.reduce({graph, start_x}, fn ch, {g, cx} ->
+      w = FontMetrics.width(ch, font_size, fm)
+      color = if fill_limit >= cx + w / 2, do: {0, 0, 0}, else: base_color
+
+      g =
+        g
+        |> text(ch,
+          fill: color,
+          font: font,
+          font_size: font_size,
+          translate: {cx, y}
+        )
+
+      {g, cx + w}
+    end)
+    |> elem(0)
+  end
 
 end

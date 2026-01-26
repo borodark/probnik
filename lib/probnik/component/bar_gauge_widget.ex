@@ -547,8 +547,7 @@ defmodule Probnik.Component.BarGaugeWidget do
         if active do
           color
         else
-          # Dim version
-          dim_color(color, 0.15)
+          {0, 0, 0}
         end
 
       g
@@ -598,17 +597,12 @@ defmodule Probnik.Component.BarGaugeWidget do
     value_font = max(10, round(min(area_w, area_h) * 0.2)) * 4
     x = config.width - 12 * s
     y = config.height - 12 * s
-    label = if config.attribute == :memory, do: "PROC MEM", else: "PROC MSGQ"
+    label = if config.attribute == :memory, do: "PROC MEM MB", else: "PROC MSGQ"
     value = top5_total(procs, config.attribute)
+    fill_limit = top5_fill_limit(procs, config)
 
     graph
-    |> text(value,
-      fill: {255, 140, 0},
-      font: :courier_bold,
-      font_size: value_font,
-      text_align: :right,
-      translate: {x, y - label_font * 2.6}
-    )
+    |> draw_inverted_value(value, value_font, x, y - label_font * 2.6, fill_limit)
     |> text(label,
       fill: with_alpha(c.secondary, 80),
       font: :courier_bold,
@@ -620,6 +614,64 @@ defmodule Probnik.Component.BarGaugeWidget do
 
   defp with_alpha({r, g, b}, a), do: {r, g, b, a}
   defp with_alpha({r, g, b, _}, a), do: {r, g, b, a}
+
+  defp draw_inverted_value(graph, value, font_size, right_x, y, fill_limit) do
+    {:ok, {Scenic.Assets.Static.Font, fm}} = Scenic.Assets.Static.meta(:courier_bold)
+    total_w = FontMetrics.width(value, font_size, fm)
+    start_x = right_x - total_w
+
+    value
+    |> String.graphemes()
+    |> Enum.reduce({graph, start_x}, fn ch, {g, x} ->
+      w = FontMetrics.width(ch, font_size, fm)
+      color = if fill_limit >= x + w / 2, do: {0, 0, 0}, else: {255, 140, 0}
+
+      g =
+        g
+        |> text(ch,
+          fill: color,
+          font: :courier_bold,
+          font_size: font_size,
+          translate: {x, y}
+        )
+
+      {g, x + w}
+    end)
+    |> elem(0)
+  end
+
+  defp top5_fill_limit(procs, config) do
+    s = config.scale
+    top_pad = 8 * s
+    rows_height = config.height - top_pad * 2
+    row_height = rows_height / 5
+    row_inner_height = row_height - 4 * s
+    bar_height = max(row_inner_height - 16 * s, 12 * s)
+    text_width = config.width * 0.6
+    meter_x = text_width
+    meter_width = config.width - meter_x - 10 * s
+
+    middle =
+      procs
+      |> Enum.filter(fn p -> (p.value || 0) > 0 end)
+      |> Enum.at(2)
+
+    sum =
+      procs
+      |> Enum.map(&(&1.value || 0))
+      |> Enum.sum()
+
+    ratio =
+      case middle do
+        nil -> 0.0
+        proc -> if sum > 0, do: proc.value / sum, else: 0.0
+      end
+
+    bar_x = meter_x
+    _bar_y = top_pad + (row_inner_height - bar_height) / 2 + 4 * s
+    fill_limit = bar_x + meter_width * ratio
+    max(fill_limit, bar_x)
+  end
 
   defp top5_total(procs, :memory) do
     bytes = procs |> Enum.map(&(&1.value || 0)) |> Enum.sum()

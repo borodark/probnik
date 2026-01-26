@@ -223,7 +223,7 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     |> rect({config.width, config.height}, fill: c.bg, stroke: {max(1, round(2 * s)), c.border})
     |> draw_info(data, config, avg_usage, avg_rq, max_rq, min_rq, pressure, runq_rate, glow_intensity, c)
     |> draw_rows([], config, c)
-    |> draw_watermark(config, c)
+    |> draw_watermark(config, c, pressure)
   end
 
   defp draw_info(graph, data, config, avg_usage, avg_rq, max_rq, min_rq, pressure, runq_rate, glow_intensity, c) do
@@ -468,22 +468,17 @@ defmodule Probnik.Component.SchedulerPressureWidget do
   defp with_alpha({r, g, b}, a), do: {r, g, b, a}
   defp with_alpha({r, g, b, _}, a), do: {r, g, b, a}
 
-  defp draw_watermark(graph, config, c) do
+  defp draw_watermark(graph, config, c, pressure) do
     area_w = config.width * 0.4
     area_h = config.height * 0.4
     font_size = max(12, round(min(area_w, area_h) * 0.35))
     x = config.width - 12 * config.s
     y = config.height - 12 * config.s
     label = "SCHED UTIL"
+    {tape_x, tape_w, ratio} = tape_fill_info(config, pressure)
+    fill_limit = tape_x + tape_w * ratio
 
-    graph
-    |> text(label,
-      fill: with_alpha(c.secondary, 80),
-      font: :courier_bold,
-      font_size: font_size,
-      text_align: :right,
-      translate: {x, y}
-    )
+    draw_label_chars(graph, label, font_size, x, y, fill_limit, with_alpha(c.secondary, 80))
   end
 
   defp draw_util_value(graph, usage_ratio, tape_x, tape_w, ratio, config, _c) do
@@ -500,6 +495,14 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     draw_util_value_chars(graph, value, value_font, x_value, y_value, fill_limit)
   end
 
+  defp tape_fill_info(config, pressure) do
+    sx = config.sx
+    x = 20 * sx
+    width = config.width - 40 * sx
+    ratio = min(max(pressure, 0.0), 1.0)
+    {x, width, ratio}
+  end
+
   defp draw_util_value_chars(graph, value, font_size, right_x, y, fill_limit) do
     {:ok, {Static.Font, fm}} = Static.meta(:courier_bold)
     total_w = FontMetrics.width(value, font_size, fm)
@@ -509,7 +512,32 @@ defmodule Probnik.Component.SchedulerPressureWidget do
     |> String.graphemes()
     |> Enum.reduce({graph, start_x}, fn ch, {g, x} ->
       w = FontMetrics.width(ch, font_size, fm)
-      color = if fill_limit >= x, do: {0, 0, 0}, else: {255, 140, 0}
+      color = if fill_limit >= x + w / 2, do: {0, 0, 0}, else: {255, 140, 0}
+
+      g =
+        g
+        |> text(ch,
+          fill: color,
+          font: :courier_bold,
+          font_size: font_size,
+          translate: {x, y}
+        )
+
+      {g, x + w}
+    end)
+    |> elem(0)
+  end
+
+  defp draw_label_chars(graph, value, font_size, right_x, y, fill_limit, base_color) do
+    {:ok, {Static.Font, fm}} = Static.meta(:courier_bold)
+    total_w = FontMetrics.width(value, font_size, fm)
+    start_x = right_x - total_w
+
+    value
+    |> String.graphemes()
+    |> Enum.reduce({graph, start_x}, fn ch, {g, x} ->
+      w = FontMetrics.width(ch, font_size, fm)
+      color = if fill_limit >= x + w / 2, do: {0, 0, 0}, else: base_color
 
       g =
         g
