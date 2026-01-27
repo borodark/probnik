@@ -11,8 +11,8 @@ defmodule Probnik.Component.Top5Widget do
   import Scenic.Primitives
 
   @update_interval 1000
-  @row_height 85
-  @header_height 60
+  @base_width 600
+  @base_height 450
 
   @impl Scenic.Component
   def validate(opts) when is_list(opts), do: {:ok, opts}
@@ -26,11 +26,15 @@ defmodule Probnik.Component.Top5Widget do
     attribute = Keyword.get(opts, :attribute, :memory)
     title = Keyword.get(opts, :title, "Top 5")
 
+    scale = min(width / @base_width, height / @base_height)
+    header_h = max(12, round(60 * scale))
     config = %{
       width: width,
       height: height,
       attribute: attribute,
-      title: title
+      title: title,
+      scale: scale,
+      header_height: header_h
     }
 
     procs = fetch_top5(config.attribute)
@@ -62,23 +66,34 @@ defmodule Probnik.Component.Top5Widget do
   defp fetch_top5(attribute) do
     target = Probnik.Application.target_node()
 
-    case :rpc.call(target, :recon, :proc_count, [attribute, 5], 5000) do
-      {:badrpc, reason} ->
-        IO.puts("RPC to #{target} failed: #{inspect(reason)}")
-        []
+    if remote_target?(target) do
+      case :rpc.call(target, :recon, :proc_count, [attribute, 5], 5000) do
+        {:badrpc, _reason} ->
+          []
 
-      result when is_list(result) ->
-        Enum.map(result, fn {pid, value, info} ->
-          # Get the real initial call like LiveDashboard does
-          real_initial_call = :rpc.call(target, :proc_lib, :initial_call, [pid], 2000)
-          %{pid: pid, value: value, name: extract_name(info, real_initial_call)}
-        end)
+        result when is_list(result) ->
+          Enum.map(result, fn {pid, value, info} ->
+            # Get the real initial call like LiveDashboard does
+            real_initial_call = :rpc.call(target, :proc_lib, :initial_call, [pid], 2000)
+            %{pid: pid, value: value, name: extract_name(info, real_initial_call)}
+          end)
 
-      _ ->
-        []
+        _ ->
+          []
+      end
+    else
+      :recon.proc_count(attribute, 5)
+      |> Enum.map(fn {pid, value, info} ->
+        real_initial_call = :proc_lib.initial_call(pid)
+        %{pid: pid, value: value, name: extract_name(info, real_initial_call)}
+      end)
     end
   rescue
     _ -> []
+  end
+
+  defp remote_target?(target) do
+    target != Node.self() and Node.alive?() and Enum.member?(Node.list(), target)
   end
 
   defp extract_name(info, real_initial_call) when is_list(info) do
@@ -116,32 +131,29 @@ defmodule Probnik.Component.Top5Widget do
   defp build_graph(procs, config) do
     c = ColorScheme.current()
 
-    Graph.build(font: :roboto, font_size: 36)
-    |> rect({config.width, config.height}, fill: c.bg, stroke: {2, c.border})
-    |> draw_header(config, c)
+    s = config.scale
+    Graph.build(font: :courier, font_size: max(12, round(36 * s)))
+    |> rect({config.width, config.height}, fill: c.bg, stroke: {max(1, round(2 * s)), c.border})
     |> draw_rows(procs, config, c)
-  end
-
-  defp draw_header(graph, config, c) do
-    graph
-    |> text(config.title,
-      fill: c.secondary,
-      font_size: 32,
-      translate: {20, 40}
-    )
-    |> line({{0, @header_height}, {config.width, @header_height}}, stroke: {2, c.border})
+    |> draw_watermark(config, c, procs)
   end
 
   defp draw_rows(graph, procs, config, c) do
+    s = config.scale
+    top_pad = 8 * s
+    rows_height = config.height - top_pad * 2
+    row_height = rows_height / 5
     procs
     |> Enum.with_index(1)
     |> Enum.reduce(graph, fn {proc, idx}, g ->
-      draw_row(g, proc, idx, config, c)
+      draw_row(g, proc, idx, config, c, row_height)
     end)
   end
 
-  defp draw_row(graph, proc, idx, config, c) do
-    y = @header_height + 10 + (idx - 1) * @row_height
+  defp draw_row(graph, proc, idx, config, c, row_height) do
+    s = config.scale
+    top_pad = 8 * s
+    y = top_pad + (idx - 1) * row_height
 
     # Rank number
     rank_str = "#{idx}."
@@ -165,23 +177,113 @@ defmodule Probnik.Component.Top5Widget do
     # Rank - small, left side
     |> text(rank_str,
       fill: rank_color,
-      font_size: 32,
-      translate: {15, y + 45}
+      font_size: max(12, round(row_height * 0.8)),
+      translate: {15 * s, y + row_height * 0.8}
     )
     # NAME - BIG AND PROMINENT
     |> text(name_str,
       fill: c.primary,
-      font_size: 48,
-      translate: {60, y + 48}
+      font_size: max(12, round(48 * s)),
+      translate: {60 * s, y + row_height * 0.6}
     )
     # Value - smaller, right aligned
     |> text(value_str,
       fill: rank_color,
-      font_size: 32,
+      font_size: max(12, round(row_height * 0.8)),
       text_align: :right,
-      translate: {config.width - 20, y + 45}
+      translate: {config.width - 20 * s, y + row_height * 0.8}
     )
   end
+
+  defp draw_watermark(graph, config, c, procs) do
+    s = config.scale
+    area_w = config.width * 0.4
+    area_h = config.height * 0.4
+    label_font = max(12, round(min(area_w, area_h) * 0.35))
+    value_font = max(10, round(min(area_w, area_h) * 0.2)) * 4
+    x = config.width - 12 * s
+    y = config.height - 12 * s
+    label = if config.attribute == :memory, do: "PROC MEM MB", else: "PROC MSGQ"
+    value = top5_total(procs, config.attribute)
+    fill_limit = top5_fill_limit(procs, config)
+
+    graph
+    |> draw_inverted_value(value, value_font, x, y - label_font * 2.6, fill_limit)
+    |> text(label,
+      fill: with_alpha(c.secondary, 80),
+      font: :courier_bold,
+      font_size: label_font,
+      text_align: :right,
+      translate: {x, y}
+    )
+  end
+
+  defp with_alpha({r, g, b}, a), do: {r, g, b, a}
+  defp with_alpha({r, g, b, _}, a), do: {r, g, b, a}
+
+  defp draw_inverted_value(graph, value, font_size, right_x, y, fill_limit) do
+    {:ok, {Scenic.Assets.Static.Font, fm}} = Scenic.Assets.Static.meta(:courier_bold)
+    total_w = FontMetrics.width(value, font_size, fm)
+    start_x = right_x - total_w
+
+    value
+    |> String.graphemes()
+    |> Enum.reduce({graph, start_x}, fn ch, {g, x} ->
+      w = FontMetrics.width(ch, font_size, fm)
+      color = if fill_limit >= x + w / 2, do: {0, 0, 0}, else: {255, 140, 0}
+
+      g =
+        g
+        |> text(ch,
+          fill: color,
+          font: :courier_bold,
+          font_size: font_size,
+          translate: {x, y}
+        )
+
+      {g, x + w}
+    end)
+    |> elem(0)
+  end
+
+  defp top5_fill_limit(procs, config) do
+    s = config.scale
+    top_pad = 8 * s
+    rows_height = config.height - top_pad * 2
+    row_height = rows_height / 5
+    _row_inner_height = row_height - 4 * s
+
+    max_val =
+      procs
+      |> Enum.map(&(&1.value || 0))
+      |> Enum.max(fn -> 1 end)
+
+    top =
+      procs
+      |> List.first()
+
+    ratio =
+      case top do
+        nil -> 0.0
+        proc -> if max_val > 0, do: proc.value / max_val, else: 0.0
+      end
+
+    # Approximate fill using full widget width since Top5 lacks bars
+    fill_limit = config.width * ratio
+    max(fill_limit, 0.0)
+  end
+
+  defp top5_total(procs, :memory) do
+    bytes = procs |> Enum.map(&(&1.value || 0)) |> Enum.sum()
+    mb = bytes / 1024 / 1024
+    Integer.to_string(round(mb))
+  end
+
+  defp top5_total(procs, :message_queue_len) do
+    procs |> Enum.map(&(&1.value || 0)) |> Enum.sum() |> Integer.to_string()
+  end
+
+  defp top5_total(procs, _), do: procs |> Enum.map(&(&1.value || 0)) |> Enum.sum() |> Integer.to_string()
 
   defp truncate(str, max_len) when is_binary(str) do
     if String.length(str) > max_len do
@@ -196,9 +298,8 @@ defmodule Probnik.Component.Top5Widget do
   defp format_value(bytes, :memory) do
     cond do
       bytes < 1024 -> "#{bytes} B"
-      bytes < 1024 * 1024 -> "#{Float.round(bytes / 1024, 1)} KB"
-      bytes < 1024 * 1024 * 1024 -> "#{Float.round(bytes / 1024 / 1024, 1)} MB"
-      true -> "#{Float.round(bytes / 1024 / 1024 / 1024, 2)} GB"
+      bytes < 1024 * 1024 -> "#{round(bytes / 1024)} KB"
+      true -> "#{round(bytes / 1024 / 1024)} MB"
     end
   end
 

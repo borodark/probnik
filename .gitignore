@@ -1,6 +1,9 @@
 # The directory Mix will write compiled artifacts to.
 /_build/
 
+# Cross-compiled OTP installation for Android
+/_install/
+
 # If you run "mix test --cover", coverage assets end up here.
 /cover/
 

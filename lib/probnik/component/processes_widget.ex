@@ -14,8 +14,8 @@ defmodule Probnik.Component.ProcessesWidget do
   @update_interval 1000
 
   # Layout
-  @row_height 32
-  @header_height 40
+  @base_width 1400
+  @base_height 800
   @col_widths %{
     pid: 140,
     name: 400,
@@ -37,12 +37,20 @@ defmodule Probnik.Component.ProcessesWidget do
     sort_by = Keyword.get(opts, :sort_by, :message_queue_len)
     sort_dir = Keyword.get(opts, :sort_dir, :desc)
 
+    sx = width / @base_width
+    sy = height / @base_height
+    s = min(sx, sy)
+    header_h = max(12, round(40 * sy))
     config = %{
       width: width,
       height: height,
       limit: limit,
       sort_by: sort_by,
-      sort_dir: sort_dir
+      sort_dir: sort_dir,
+      sx: sx,
+      sy: sy,
+      s: s,
+      header_height: header_h
     }
 
     processes = fetch_processes(config)
@@ -114,36 +122,20 @@ defmodule Probnik.Component.ProcessesWidget do
   defp build_graph(processes, config) do
     c = ColorScheme.current()
 
-    Graph.build(font: :roboto_mono, font_size: 18)
+    Graph.build(font: :courier, font_size: max(10, round(18 * config.s)))
     |> rect({config.width, config.height}, fill: c.bg)
-    |> draw_header(c)
     |> draw_processes(processes, c, config)
+    |> draw_watermark(config, c)
   end
 
-  defp draw_header(graph, c) do
-    y = 25
-
-    graph
-    |> line({{0, @header_height}, {1400, @header_height}}, stroke: {2, c.border})
-    |> text("PID", fill: c.secondary, translate: {10, y})
-    |> text("Name / Initial Call", fill: c.secondary, translate: {10 + @col_widths.pid, y})
-    |> text("MsgQ", fill: c.secondary, translate: {10 + @col_widths.pid + @col_widths.name, y})
-    |> text("Memory", fill: c.secondary, translate: {10 + @col_widths.pid + @col_widths.name + @col_widths.msgq, y})
-    |> text("Reds", fill: c.secondary, translate: {10 + @col_widths.pid + @col_widths.name + @col_widths.msgq + @col_widths.memory, y})
-    |> text("Current Function", fill: c.secondary, translate: {10 + @col_widths.pid + @col_widths.name + @col_widths.msgq + @col_widths.memory + @col_widths.reds, y})
-  end
-
-  defp draw_processes(graph, processes, c, _config) do
-    processes
-    |> Enum.with_index()
-    |> Enum.reduce(graph, fn {proc, idx}, g ->
-      draw_process_row(g, proc, idx, c)
-    end)
-  end
-
-  defp draw_process_row(graph, proc, idx, c) do
-    y = @header_height + 25 + idx * @row_height
-    x_offset = 10
+  defp draw_process_row(graph, proc, idx, c, config) do
+    sx = config.sx
+    sy = config.sy
+    top_pad = 8 * sy
+    row_height = (config.height - top_pad * 2) / max(config.limit, 1)
+    y = top_pad + idx * row_height
+    x_offset = 10 * sx
+    col_widths = scale_cols(sx)
 
     # Highlight rows with message queue > 0
     {text_color, msgq_color} =
@@ -162,11 +154,11 @@ defmodule Probnik.Component.ProcessesWidget do
     curr_str = truncate(proc.current_function, 45)
 
     x1 = x_offset
-    x2 = x1 + @col_widths.pid
-    x3 = x2 + @col_widths.name
-    x4 = x3 + @col_widths.msgq
-    x5 = x4 + @col_widths.memory
-    x6 = x5 + @col_widths.reds
+    x2 = x1 + col_widths.pid
+    x3 = x2 + col_widths.name
+    x4 = x3 + col_widths.msgq
+    x5 = x4 + col_widths.memory
+    x6 = x5 + col_widths.reds
 
     graph
     |> text(pid_str, fill: c.accent, translate: {x1, y})
@@ -176,6 +168,45 @@ defmodule Probnik.Component.ProcessesWidget do
     |> text(reds_str, fill: text_color, translate: {x5, y})
     |> text(curr_str, fill: c.secondary, translate: {x6, y})
   end
+
+  defp draw_processes(graph, processes, c, config) do
+    processes
+    |> Enum.with_index()
+    |> Enum.reduce(graph, fn {proc, idx}, g ->
+      draw_process_row(g, proc, idx, c, config)
+    end)
+  end
+
+  defp scale_cols(sx) do
+    %{
+      pid: @col_widths.pid * sx,
+      name: @col_widths.name * sx,
+      msgq: @col_widths.msgq * sx,
+      memory: @col_widths.memory * sx,
+      reds: @col_widths.reds * sx,
+      current: @col_widths.current * sx
+    }
+  end
+
+  defp draw_watermark(graph, config, c) do
+    area_w = config.width * 0.4
+    area_h = config.height * 0.4
+    font_size = max(12, round(min(area_w, area_h) * 0.35))
+    x = config.width - 12 * config.s
+    y = config.height - 12 * config.s
+
+    graph
+    |> text("PROCS",
+      fill: with_alpha(c.secondary, 80),
+      font: :courier_bold,
+      font_size: font_size,
+      text_align: :right,
+      translate: {x, y}
+    )
+  end
+
+  defp with_alpha({r, g, b}, a), do: {r, g, b, a}
+  defp with_alpha({r, g, b, _}, a), do: {r, g, b, a}
 
   defp truncate(str, max_len) when is_binary(str) do
     if String.length(str) > max_len do

@@ -1,0 +1,115 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    androidResources {
+        // Don't ignore Scenic assets stored under __scenic/
+        ignoreAssetsPattern = "!__scenic:!__scenic/**"
+    }
+    namespace "com.probnik"
+    compileSdk 34
+    ndkVersion "25.2.9519653"
+
+    defaultConfig {
+        applicationId "com.probnik"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "0.1.0"
+
+        // OpenGL ES 3.0
+        manifestPlaceholders = [glEsVersion: "0x00030000"]
+
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17 -fexceptions"
+                arguments "-DANDROID_STL=c++_shared"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+            jniDebuggable true
+            externalNativeBuild {
+                cmake {
+                    cppFlags "-O0 -g"
+                }
+            }
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            externalNativeBuild {
+                cmake {
+                    cppFlags "-O2 -DNDEBUG"
+                }
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            assets.srcDirs = ["src/main/assets"]
+            // Pre-built native libraries (if any)
+            jniLibs.srcDirs = ["src/main/jniLibs"]
+        }
+    }
+
+    packagingOptions {
+        // Don't compress native libs for faster loading
+        jniLibs {
+            useLegacyPackaging = true
+        }
+        // Exclude unnecessary files
+        resources {
+            excludes += ['META-INF/DEPENDENCIES', 'META-INF/LICENSE', 'META-INF/NOTICE']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+// Copy Erlang release to assets before build
+task copyErlangRelease(type: Copy) {
+    from "${rootProject.projectDir}/../../_build/android/release/arm64-v8a"
+    into "${projectDir}/src/main/assets/erlang"
+    include "**/*"
+    include ".*"
+    // Rename __scenic directory so Android packaging won't ignore it
+    eachFile { details ->
+        details.path = details.path.replace("/__scenic/", "/scenic/")
+    }
+}
+
+// Clean copied assets when cleaning build
+task cleanErlangAssets(type: Delete) {
+    delete "${projectDir}/src/main/assets/erlang"
+}
+
+clean.dependsOn cleanErlangAssets
+preBuild.dependsOn copyErlangRelease
+
+dependencies {
+}
