@@ -34,6 +34,7 @@ defmodule Probnik.MixProject do
     [
       {:scenic, "~> 0.11"},
       {:scenic_driver_local, "~> 0.11"},
+      {:scenic_driver_remote, path: "../scenic_driver_remote"},
       {:recon, "~> 2.5"}
     ]
   end

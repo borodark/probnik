@@ -4,7 +4,16 @@
 #include <android/asset_manager_jni.h>
 #include <GLES3/gl3.h>
 
-#include "scenic_local/renderer_android.h"
+#include "scenic_renderer.h"
+#include "scenic_protocol.h"
+
+// Platform functions from scenic_renderer_native/src/platform/android/platform_android.c
+extern "C" {
+    scenic_platform_t scenic_platform_android_get_platform(void);
+    void scenic_platform_android_setup_renderer(scenic_renderer_t* renderer);
+    void scenic_platform_android_shutdown(void);
+    void scenic_platform_android_set_clear_color(float r, float g, float b, float a);
+}
 
 #include <string>
 #include <sys/stat.h>
@@ -28,13 +37,14 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// Message types from Scenic driver
-#define MSG_CLEAR_COLOR 1
-#define MSG_UPDATE_SCENE 2
-#define MSG_DELETE_SCRIPTS 3
-#define MSG_RESET 4
-#define MSG_PUT_FONT 5
-#define MSG_PUT_IMAGE 6
+// Message types from Scenic driver (now using protocol constants from scenic_protocol.h)
+// SCENIC_CMD_PUT_SCRIPT    0x01
+// SCENIC_CMD_DEL_SCRIPT    0x02
+// SCENIC_CMD_RESET         0x03
+// SCENIC_CMD_CLEAR_COLOR   0x04
+// SCENIC_CMD_PUT_FONT      0x05
+// SCENIC_CMD_PUT_IMAGE     0x06
+// SCENIC_CMD_RENDER        0x07
 
 static std::string g_release_root;
 static std::string g_erts_bin;
@@ -50,6 +60,7 @@ static std::mutex g_render_mutex;
 static std::mutex g_socket_send_mutex;
 static std::atomic<bool> g_logged_first_msg{false};
 static std::deque<std::pair<uint8_t, std::vector<uint8_t>>> g_pending_msgs;
+static scenic_renderer_t* g_renderer = nullptr;
 
 // Render state
 static GLuint g_test_program = 0;
@@ -176,8 +187,8 @@ Java_com_probnik_ProbnikNative_resize(JNIEnv* env, jclass clazz, jint width, jin
     LOGI("resize(%d, %d)", width, height);
     send_viewport_resize(static_cast<float>(width), static_cast<float>(height));
 
-    if (g_renderer_ready) {
-        scenic_android_resize(g_screen_width, g_screen_height, 1.0f);
+    if (g_renderer != nullptr) {
+        scenic_renderer_resize(g_renderer, g_screen_width, g_screen_height, 1.0f);
     }
 }
 
@@ -189,17 +200,31 @@ Java_com_probnik_ProbnikNative_render(JNIEnv* env, jclass clazz) {
         glViewport(0, 0, g_screen_width, g_screen_height);
     }
 
-    if (!g_renderer_ready && g_screen_width > 0 && g_screen_height > 0) {
-        scenic_android_init(g_screen_width, g_screen_height, 1.0f);
-        g_renderer_ready = true;
+    if (g_renderer == nullptr && g_screen_width > 0 && g_screen_height > 0) {
+        scenic_renderer_config_t config = {};
+        config.width = g_screen_width;
+        config.height = g_screen_height;
+        config.pixel_ratio = 1.0f;
+        config.transport = nullptr;  // Manual command mode
+        config.platform = scenic_platform_android_get_platform();
+        g_renderer = scenic_renderer_create(&config);
+        if (g_renderer != nullptr) {
+            // Set up NanoVG context
+            scenic_platform_android_setup_renderer(g_renderer);
+            g_renderer_ready = true;
+            LOGI("Scenic renderer created");
+        } else {
+            g_renderer_ready = false;
+            LOGE("Failed to create scenic renderer");
+        }
     }
 
-    if (g_renderer_ready) {
+    if (g_renderer != nullptr) {
         process_pending_messages();
     }
 
-    if (g_renderer_ready && g_has_scene) {
-        scenic_android_render();
+    if (g_renderer != nullptr && g_has_scene) {
+        scenic_renderer_render(g_renderer);
     } else {
         ensure_test_triangle();
         if (g_test_ready) {
@@ -226,7 +251,11 @@ Java_com_probnik_ProbnikNative_destroy(JNIEnv* env, jclass clazz) {
 
     {
         std::lock_guard<std::mutex> lock(g_render_mutex);
-        scenic_android_shutdown();
+        if (g_renderer != nullptr) {
+            scenic_renderer_destroy(g_renderer);
+            g_renderer = nullptr;
+        }
+        scenic_platform_android_shutdown();
         g_renderer_ready = false;
         g_has_scene = false;
     }
@@ -391,15 +420,22 @@ static void send_input_touch(uint8_t action, float x, float y) {
         return;
     }
 
-    const uint8_t msg_type = 1; // touch input
-    uint8_t buffer[1 + 1 + 4 + 4];
+    // Protocol: [type:1][length:4-be][payload...]
+    // Touch payload: [action:1][x:f32-be][y:f32-be] = 9 bytes
+    const uint8_t msg_type = SCENIC_EVT_TOUCH;
+    const uint32_t payload_len = 9;
+    uint8_t buffer[5 + 9];
 
     buffer[0] = msg_type;
-    buffer[1] = action;
+    buffer[1] = (payload_len >> 24) & 0xFF;
+    buffer[2] = (payload_len >> 16) & 0xFF;
+    buffer[3] = (payload_len >> 8) & 0xFF;
+    buffer[4] = payload_len & 0xFF;
+    buffer[5] = action;
     uint32_t bx = float_to_be(x);
     uint32_t by = float_to_be(y);
-    memcpy(buffer + 2, &bx, sizeof(uint32_t));
-    memcpy(buffer + 6, &by, sizeof(uint32_t));
+    memcpy(buffer + 6, &bx, sizeof(uint32_t));
+    memcpy(buffer + 10, &by, sizeof(uint32_t));
 
     ssize_t sent = send(g_client_socket, buffer, sizeof(buffer), 0);
     if (sent < 0) {
@@ -413,14 +449,29 @@ static void send_viewport_resize(float width, float height) {
         return;
     }
 
-    const uint8_t msg_type = 3; // viewport reshape
-    uint8_t buffer[1 + 4 + 4];
+    // Protocol: [type:1][length:4-be][payload...]
+    // Reshape payload: [width:u32-be][height:u32-be] = 8 bytes
+    const uint8_t msg_type = SCENIC_EVT_RESHAPE;
+    const uint32_t payload_len = 8;
+    uint8_t buffer[5 + 8];
 
     buffer[0] = msg_type;
-    uint32_t bw = float_to_be(width);
-    uint32_t bh = float_to_be(height);
-    memcpy(buffer + 1, &bw, sizeof(uint32_t));
-    memcpy(buffer + 5, &bh, sizeof(uint32_t));
+    buffer[1] = (payload_len >> 24) & 0xFF;
+    buffer[2] = (payload_len >> 16) & 0xFF;
+    buffer[3] = (payload_len >> 8) & 0xFF;
+    buffer[4] = payload_len & 0xFF;
+
+    // Width and height as unsigned 32-bit integers in big-endian
+    uint32_t w = static_cast<uint32_t>(width);
+    uint32_t h = static_cast<uint32_t>(height);
+    buffer[5] = (w >> 24) & 0xFF;
+    buffer[6] = (w >> 16) & 0xFF;
+    buffer[7] = (w >> 8) & 0xFF;
+    buffer[8] = w & 0xFF;
+    buffer[9] = (h >> 24) & 0xFF;
+    buffer[10] = (h >> 16) & 0xFF;
+    buffer[11] = (h >> 8) & 0xFF;
+    buffer[12] = h & 0xFF;
 
     ssize_t sent = send(g_client_socket, buffer, sizeof(buffer), 0);
     if (sent < 0) {
@@ -428,76 +479,96 @@ static void send_viewport_resize(float width, float height) {
     }
 }
 
+static float be_to_float(const uint8_t* data) {
+    uint32_t val = (static_cast<uint32_t>(data[0]) << 24) |
+                   (static_cast<uint32_t>(data[1]) << 16) |
+                   (static_cast<uint32_t>(data[2]) << 8) |
+                   static_cast<uint32_t>(data[3]);
+    union {
+        uint32_t u;
+        float f;
+    } v;
+    v.u = val;
+    return v.f;
+}
+
 static void process_pending_messages() {
+    if (g_renderer == nullptr) return;
+
     while (!g_pending_msgs.empty()) {
         auto msg = std::move(g_pending_msgs.front());
         g_pending_msgs.pop_front();
         const uint8_t type = msg.first;
         const std::vector<uint8_t>& payload = msg.second;
 
-    switch (type) {
-        case MSG_CLEAR_COLOR: {
-            if (payload.size() >= 16) {
-                float r, g, b, a;
-                memcpy(&r, payload.data(), 4);
-                memcpy(&g, payload.data() + 4, 4);
-                memcpy(&b, payload.data() + 8, 4);
-                memcpy(&a, payload.data() + 12, 4);
-                scenic_android_set_clear_color(r, g, b, a);
-                LOGI("Clear color: %.2f, %.2f, %.2f, %.2f", r, g, b, a);
-            }
-            break;
-        }
-
-        case MSG_UPDATE_SCENE: {
-            if (payload.empty()) {
-                LOGI("Update scene: empty payload");
+        switch (type) {
+            case SCENIC_CMD_CLEAR_COLOR: {
+                if (payload.size() >= 16) {
+                    // Floats are in big-endian format
+                    float r = be_to_float(payload.data());
+                    float g = be_to_float(payload.data() + 4);
+                    float b = be_to_float(payload.data() + 8);
+                    float a = be_to_float(payload.data() + 12);
+                    scenic_renderer_cmd_clear_color(g_renderer, r, g, b, a);
+                    scenic_platform_android_set_clear_color(r, g, b, a);
+                    LOGI("Clear color: %.2f, %.2f, %.2f, %.2f", r, g, b, a);
+                }
                 break;
             }
 
-            scenic_android_put_script(payload.data(), static_cast<int>(payload.size()));
-            g_has_scene = true;
-            break;
-        }
-
-        case MSG_DELETE_SCRIPTS: {
-            if (payload.empty()) {
-                LOGI("Delete scripts: empty payload");
+            case SCENIC_CMD_PUT_SCRIPT: {
+                LOGI("Put script: %zu bytes", payload.size());
+                if (payload.empty()) {
+                    break;
+                }
+                scenic_renderer_cmd_put_script(g_renderer, payload.data(), static_cast<uint32_t>(payload.size()));
+                g_has_scene = true;
                 break;
             }
 
-            scenic_android_delete_script(payload.data(), static_cast<int>(payload.size()));
-            break;
-        }
-
-        case MSG_RESET: {
-            LOGI("Reset scene");
-            scenic_android_reset();
-            break;
-        }
-
-        case MSG_PUT_FONT: {
-            if (payload.empty()) {
-                LOGI("Put font: empty payload");
+            case SCENIC_CMD_DEL_SCRIPT: {
+                if (payload.empty()) {
+                    LOGI("Delete script: empty payload");
+                    break;
+                }
+                scenic_renderer_cmd_del_script(g_renderer, payload.data(), static_cast<uint32_t>(payload.size()));
                 break;
             }
-            scenic_android_put_font(payload.data(), static_cast<int>(payload.size()));
-            break;
-        }
 
-        case MSG_PUT_IMAGE: {
-            if (payload.empty()) {
-                LOGI("Put image: empty payload");
+            case SCENIC_CMD_RESET: {
+                LOGI("Reset scene");
+                scenic_renderer_cmd_reset(g_renderer);
+                g_has_scene = false;
                 break;
             }
-            scenic_android_put_image(payload.data(), static_cast<int>(payload.size()));
-            break;
-        }
 
-        default:
-            LOGI("Unknown message type: %d", type);
-            break;
-    }
+            case SCENIC_CMD_PUT_FONT: {
+                if (payload.empty()) {
+                    LOGI("Put font: empty payload");
+                    break;
+                }
+                scenic_renderer_cmd_put_font(g_renderer, payload.data(), static_cast<uint32_t>(payload.size()));
+                break;
+            }
+
+            case SCENIC_CMD_PUT_IMAGE: {
+                if (payload.empty()) {
+                    LOGI("Put image: empty payload");
+                    break;
+                }
+                scenic_renderer_cmd_put_image(g_renderer, payload.data(), static_cast<uint32_t>(payload.size()));
+                break;
+            }
+
+            case SCENIC_CMD_RENDER: {
+                LOGI("Render command received");
+                break;
+            }
+
+            default:
+                LOGI("Unknown message type: 0x%02x len=%zu", type, payload.size());
+                break;
+        }
     }
 }
 

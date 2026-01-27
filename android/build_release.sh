@@ -42,3 +42,11 @@ echo ""
 du -sh "${ANDROID_RELEASE}/arm64-v8a/"
 echo ""
 echo "Files: $(wc -l < "${ANDROID_RELEASE}/arm64-v8a/file_manifest.txt") files in manifest"
+
+cd android/host
+./gradlew assembleDebug
+
+# 6. Install on device
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+
+cd ../..
