@@ -57,6 +57,12 @@ build_one() {
     --host="${host}" \
     --build="$(./erts/autoconf/config.guess)" \
     --disable-jit \
+    --disable-sctp \
+    --without-et \
+    --without-common_test \
+    --without-syntax_tools \
+    --without-javac \
+    --without-snmp \
     --without-wx \
     --without-odbc \
     --without-jinterface \
@@ -64,6 +70,15 @@ build_one() {
     --without-megaco \
     --without-debugger \
     --without-observer \
+    --without-diameter \
+    --without-radius \
+    --without-cosEvent \
+    --without-cosEventDomain \
+    --without-cosFileTransfer \
+    --without-cosNotification \
+    --without-cosProperty \
+    --without-cosTime \
+    --without-cosTransactions \
     --enable-static-nifs \
     ${OPENSSL_FLAGS} \
     ${extra_flags} \
