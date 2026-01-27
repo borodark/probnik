@@ -543,8 +543,8 @@ static void process_pending_messages() {
             }
 
             case SCENIC_CMD_PUT_FONT: {
+                LOGI("Put font: %zu bytes", payload.size());
                 if (payload.empty()) {
-                    LOGI("Put font: empty payload");
                     break;
                 }
                 scenic_renderer_cmd_put_font(g_renderer, payload.data(), static_cast<uint32_t>(payload.size()));
