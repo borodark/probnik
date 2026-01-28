@@ -33,6 +33,7 @@ defmodule Probnik.MixProject do
   defp deps do
     [
       {:scenic, "~> 0.11"},
+      {:scenic_driver_local, "~> 0.11"},
       {:scenic_driver_remote, git: "https://github.com/borodark/scenic_driver_remote.git"},
       {:recon, "~> 2.5"}
     ]

@@ -12,7 +12,6 @@ defmodule Probnik.Component.BarGaugeWidget do
 
 
   @update_interval 250
-  @header_height 32
   @bar_segments 30  # 3x more segments, skinnier marks
   @base_width 1600
   @base_height 600
@@ -88,7 +87,7 @@ defmodule Probnik.Component.BarGaugeWidget do
 
     result
   rescue
-    e ->
+    _e ->
       fetch_local(attribute)
   end
 
@@ -579,14 +578,6 @@ defmodule Probnik.Component.BarGaugeWidget do
           List.duplicate(c.primary, 12) ++
           List.duplicate(c.secondary, 8)
     end
-  end
-
-  defp dim_color({r, g, b}, factor) do
-    {trunc(r * factor), trunc(g * factor), trunc(b * factor)}
-  end
-
-  defp dim_color({r, g, b, a}, factor) do
-    {trunc(r * factor), trunc(g * factor), trunc(b * factor), a}
   end
 
   defp draw_watermark(graph, config, c, procs) do

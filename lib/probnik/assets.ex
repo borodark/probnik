@@ -7,6 +7,7 @@ defmodule Probnik.Assets do
     ],
     alias: [
       courier: "fonts/courier.ttf",
-      courier_bold: "fonts/courier_bold.ttf"
+      # Use regular Courier for bold to avoid driver crashes with the bold font file.
+      courier_bold: "fonts/courier.ttf"
     ]
 end

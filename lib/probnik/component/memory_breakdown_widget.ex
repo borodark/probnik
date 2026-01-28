@@ -11,7 +11,6 @@ defmodule Probnik.Component.MemoryBreakdownWidget do
   import Scenic.Primitives
 
   @update_interval 2000
-  @header_height 60
   @base_width 1600
   @base_height 600
 
