@@ -226,14 +226,9 @@ Java_com_probnik_ProbnikNative_render(JNIEnv* env, jclass clazz) {
     if (g_renderer != nullptr && g_has_scene) {
         scenic_renderer_render(g_renderer);
     } else {
-        ensure_test_triangle();
-        if (g_test_ready) {
-            glUseProgram(g_test_program);
-            glBindVertexArray(g_test_vao);
-            glDrawArrays(GL_TRIANGLES, 0, 3);
-            glBindVertexArray(0);
-            glUseProgram(0);
-        }
+        // Just clear to black while waiting for Scenic
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
     }
 
     static bool first_render = true;

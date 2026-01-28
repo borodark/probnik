@@ -105,272 +105,428 @@ defmodule Probnik.Component.BarGaugeWidget do
     target != Node.self() and Node.alive?() and Enum.member?(Node.list(), target)
   end
 
-  defp extract_process_info(target, pid, value, info, real_initial_call) do
-    reg_name = extract_registered_name(info)
-    {proc_type, module_fn, mod} = extract_type_and_module(pid, info, real_initial_call)
-    {module_fn, mod} = maybe_infer_origin(target, pid, module_fn, mod)
-    app = resolve_app(target, mod, module_fn)
-    owner = infer_owner(target, pid)
-    name = build_display_name(app, module_fn, owner)
+  # =============================================================================
+  # Process Info Extraction - Ergonomic Labels
+  # =============================================================================
 
-    # Always display Module.Function/Arity
+  defp extract_process_info(target, pid, value, info, real_initial_call) do
+    # Gather all available process metadata
+    reg_name = extract_registered_name(info)
+    dict = get_process_dictionary(target, pid)
+    ancestors = get_ancestors(dict)
+    initial_call = get_initial_call(real_initial_call, info, dict)
+
+    # Build ergonomic label using heuristics
+    {category, label} = build_ergonomic_label(target, pid, reg_name, initial_call, ancestors, dict)
+
     %{
       pid: pid,
       value: value,
-      type: proc_type,
+      type: category,
       registered_name: reg_name,
-      module_fn: module_fn,
-      name: name
+      module_fn: format_mfa(initial_call),
+      name: label
     }
   end
 
-  defp extract_registered_name(info) do
-    reg_name = Keyword.get(info, :registered_name)
-
-    cond do
-      is_atom(reg_name) and reg_name != nil ->
-        Atom.to_string(reg_name)
-
-      is_list(reg_name) and length(reg_name) > 0 and is_atom(hd(reg_name)) ->
-        reg_name |> hd() |> Atom.to_string()
-
-      true ->
-        nil
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp extract_type_and_module(_pid, info, real_initial_call) do
-    # Try multiple sources for the best name
-    # 1. real_initial_call from proc_lib
-    # 2. initial_call from info
-    # 3. current_function from info
-    # 4. registered_name
-    # 5. PID as last resort
-
-    result = try_extract_mfa(real_initial_call) ||
-             try_extract_mfa(Keyword.get(info, :initial_call)) ||
-             try_extract_mfa(Keyword.get(info, :current_function)) ||
-             try_registered_name(info) ||
-             {"UNK", "_app.", nil}
-
-    result
-  rescue
-    _ -> {"UNK", "_app.", nil}
-  end
-
-  defp try_extract_mfa({mod, fun, arity}) when is_atom(mod) and is_atom(fun) do
-    mod_str = mod |> Atom.to_string() |> String.replace("Elixir.", "")
-
-    # Skip proc_lib and gen internal functions - not useful
-    if mod_str in ["proc_lib", "gen", "gen_server", "supervisor"] and fun in [:init_p, :init_it, :loop, :init_p_do_apply] do
-      nil
-    else
-      module_fn = "#{mod_str}.#{fun}/#{arity}"
-      proc_type = detect_type(mod_str, fun)
-      {proc_type, module_fn, mod}
+  # Get process dictionary (contains $ancestors, $initial_call, etc.)
+  defp get_process_dictionary(target, pid) do
+    case safe_rpc(target, :erlang, :process_info, [pid, :dictionary]) do
+      {:dictionary, dict} when is_list(dict) -> dict
+      _ -> []
     end
   end
 
-  defp try_extract_mfa(_), do: nil
+  # Extract $ancestors from process dictionary
+  defp get_ancestors(dict) do
+    case Keyword.get(dict, :"$ancestors") do
+      ancestors when is_list(ancestors) -> ancestors
+      _ -> []
+    end
+  end
 
-  defp try_registered_name(info) do
-    case Keyword.get(info, :registered_name) do
-      name when is_atom(name) and name != nil ->
-        name_str = Atom.to_string(name)
-        {"REG", name_str, nil}
-      [name | _] when is_atom(name) ->
-        {"REG", Atom.to_string(name), nil}
+  # Get initial call from multiple sources
+  defp get_initial_call(real_initial_call, info, dict) do
+    # Priority: proc_lib initial_call > $initial_call > process_info initial_call
+    candidates = [
+      real_initial_call,
+      Keyword.get(dict, :"$initial_call"),
+      Keyword.get(info, :initial_call)
+    ]
+
+    Enum.find_value(candidates, fn
+      {m, f, a} when is_atom(m) and is_atom(f) ->
+        if system_init?(m, f), do: nil, else: {m, f, a}
       _ ->
         nil
-    end
+    end)
   end
 
-  defp resolve_app(_target, nil, _module_fn), do: nil
+  defp system_init?(mod, fun) do
+    mod in [:proc_lib, :gen, :gen_server, :supervisor, :gen_statem, :gen_event] and
+      fun in [:init, :init_p, :init_it, :loop, :init_p_do_apply]
+  end
 
-  defp resolve_app(target, mod, _module_fn) when is_atom(mod) do
-    case :rpc.call(target, :application, :get_application, [mod], 2000) do
-      {:ok, app} when is_atom(app) -> Atom.to_string(app)
+  defp extract_registered_name(info) do
+    case Keyword.get(info, :registered_name) do
+      name when is_atom(name) and name != nil ->
+        name |> Atom.to_string() |> String.replace("Elixir.", "")
       _ -> nil
     end
   rescue
     _ -> nil
   end
 
-  defp resolve_app(target, nil, module_fn) when is_binary(module_fn) do
-    mod =
-      module_fn
-      |> String.split(".")
-      |> List.first()
+  # =============================================================================
+  # Ergonomic Label Building - Main Logic
+  # =============================================================================
 
-    case mod do
-      nil -> nil
-      "" -> nil
-      mod_str ->
-        mod_atom =
-          cond do
-            String.starts_with?(mod_str, "Elixir.") ->
-              String.to_existing_atom(mod_str)
+  defp build_ergonomic_label(target, _pid, reg_name, initial_call, ancestors, dict) do
+    cond do
+      # 1. Check for well-known patterns first
+      label = detect_well_known_pattern(target, reg_name, initial_call, ancestors, dict) ->
+        label
 
-            String.contains?(mod_str, ".") ->
-              String.to_existing_atom("Elixir." <> mod_str)
+      # 2. Registered name - often the most meaningful
+      reg_name != nil ->
+        {categorize_registered_name(reg_name), shorten_module_name(reg_name)}
 
-            true ->
-              String.to_existing_atom(mod_str)
-          end
+      # 3. Pool worker detection
+      pool_info = detect_pool_worker(target, ancestors, initial_call) ->
+        pool_info
 
-        resolve_app(target, mod_atom, module_fn)
+      # 4. Use initial_call with ancestor context
+      initial_call != nil ->
+        build_label_from_mfa(target, initial_call, ancestors)
+
+      # 5. Fallback - try to find any meaningful ancestor
+      true ->
+        case find_meaningful_ancestor(target, ancestors) do
+          nil -> {"?", "unknown"}
+          ancestor_name -> {"Worker", "#{shorten_module_name(ancestor_name)}:child"}
+        end
     end
-  rescue
-    _ -> nil
   end
 
-  defp maybe_infer_origin(_target, _pid, module_fn, mod) when is_atom(mod), do: {module_fn, mod}
+  # =============================================================================
+  # Well-Known Pattern Detection
+  # =============================================================================
 
-  defp maybe_infer_origin(target, pid, module_fn, _mod) when is_binary(module_fn) do
-    if likely_system_mfa?(module_fn) do
-      case infer_mfa_from_process(target, pid) do
-        {m, f, a} when is_atom(m) and is_atom(f) ->
-          mod_str = m |> Atom.to_string() |> String.replace("Elixir.", "")
-          {"#{mod_str}.#{f}/#{a}", m}
+  defp detect_well_known_pattern(target, reg_name, initial_call, ancestors, _dict) do
+    mfa_str = format_mfa(initial_call)
 
-        _ ->
-          {module_fn, nil}
+    cond do
+      # Phoenix LiveView
+      String.contains?(mfa_str || "", "LiveView") or
+      ancestor_contains?(target, ancestors, "LiveView") ->
+        module_name = extract_module_name(initial_call) || "View"
+        {"LiveView", shorten_module_name(module_name)}
+
+      # Phoenix Channel
+      String.contains?(mfa_str || "", "Channel") or
+      ancestor_contains?(target, ancestors, "Channel") ->
+        module_name = extract_module_name(initial_call) || "Channel"
+        {"Channel", shorten_module_name(module_name)}
+
+      # Phoenix Endpoint / Cowboy / Bandit request
+      String.contains?(mfa_str || "", "Plug.Cowboy") or
+      String.contains?(mfa_str || "", "Bandit") or
+      ancestor_contains?(target, ancestors, "Endpoint") ->
+        {"HTTP", "Request"}
+
+      # Ecto Repo / DBConnection
+      String.contains?(mfa_str || "", "DBConnection") or
+      String.contains?(mfa_str || "", "Postgrex") or
+      String.contains?(mfa_str || "", "MyXQL") or
+      ancestor_contains?(target, ancestors, "Repo") ->
+        repo_name = find_repo_name(target, ancestors) || "DB"
+        {"DB", shorten_module_name(repo_name)}
+
+      # Oban job worker
+      String.contains?(mfa_str || "", "Oban") ->
+        job_name = extract_module_name(initial_call) || "Job"
+        {"Job", shorten_module_name(job_name)}
+
+      # Task
+      String.contains?(mfa_str || "", "Task") ->
+        task_fn = extract_task_function(initial_call)
+        {"Task", task_fn || "async"}
+
+      # GenStage / Broadway
+      String.contains?(mfa_str || "", "GenStage") or
+      String.contains?(mfa_str || "", "Broadway") ->
+        stage_name = extract_module_name(initial_call) || "Stage"
+        {"Stage", shorten_module_name(stage_name)}
+
+      # Supervisor
+      is_supervisor?(mfa_str, reg_name) ->
+        sup_name = reg_name || extract_module_name(initial_call) || "Supervisor"
+        {"Sup", shorten_module_name(sup_name)}
+
+      # Registry
+      String.contains?(mfa_str || "", "Registry") ->
+        {"Registry", shorten_module_name(reg_name || "Registry")}
+
+      # GenServer with registered name
+      reg_name != nil and String.contains?(mfa_str || "", "GenServer") ->
+        {"GenServer", shorten_module_name(reg_name)}
+
+      # Telemetry
+      String.contains?(mfa_str || "", "Telemetry") ->
+        {"Telemetry", shorten_module_name(reg_name || "Handler")}
+
+      # Logger
+      String.contains?(mfa_str || "", "Logger") ->
+        {"Logger", shorten_module_name(reg_name || "Backend")}
+
+      true ->
+        nil
+    end
+  end
+
+  defp is_supervisor?(mfa_str, reg_name) do
+    String.contains?(mfa_str || "", "Supervisor") or
+    String.contains?(reg_name || "", "Supervisor") or
+    String.ends_with?(reg_name || "", ".Sup")
+  end
+
+  # =============================================================================
+  # Pool Worker Detection
+  # =============================================================================
+
+  defp detect_pool_worker(target, ancestors, initial_call) do
+    mfa_str = format_mfa(initial_call)
+
+    cond do
+      # Poolboy worker
+      ancestor_contains?(target, ancestors, "poolboy") or
+      ancestor_contains?(target, ancestors, ":poolboy_sup") ->
+        pool_name = find_pool_name(target, ancestors) || "Pool"
+        {"Pool", "#{shorten_module_name(pool_name)}:worker"}
+
+      # NimblePool
+      String.contains?(mfa_str || "", "NimblePool") or
+      ancestor_contains?(target, ancestors, "NimblePool") ->
+        pool_name = find_nimble_pool_name(target, ancestors) || "Pool"
+        {"NimblePool", shorten_module_name(pool_name)}
+
+      # DBConnection pool (Ecto, Postgrex, etc.)
+      String.contains?(mfa_str || "", "DBConnection.Connection") ->
+        repo_name = find_repo_name(target, ancestors) || "DB"
+        {"DBPool", "#{shorten_module_name(repo_name)}:conn"}
+
+      # Finch connection pool
+      String.contains?(mfa_str || "", "Finch") or
+      ancestor_contains?(target, ancestors, "Finch") ->
+        {"HTTP Pool", "Finch:conn"}
+
+      # Mint connection
+      String.contains?(mfa_str || "", "Mint") ->
+        {"HTTP", "Mint:conn"}
+
+      true ->
+        nil
+    end
+  end
+
+  # =============================================================================
+  # Label Building from MFA
+  # =============================================================================
+
+  defp build_label_from_mfa(target, {mod, fun, _arity}, ancestors) do
+    mod_str = mod |> Atom.to_string() |> String.replace("Elixir.", "")
+
+    # Determine category
+    category = cond do
+      String.contains?(mod_str, "Supervisor") -> "Sup"
+      String.contains?(mod_str, "Server") or fun == :init -> "GenServer"
+      String.contains?(mod_str, "Worker") -> "Worker"
+      String.contains?(mod_str, "Handler") -> "Handler"
+      String.contains?(mod_str, "Consumer") -> "Consumer"
+      String.contains?(mod_str, "Producer") -> "Producer"
+      true -> "Process"
+    end
+
+    # Build short label
+    short_mod = shorten_module_name(mod_str)
+
+    # Add ancestor context if module name is generic
+    label = if generic_module_name?(short_mod) do
+      case find_meaningful_ancestor(target, ancestors) do
+        nil -> short_mod
+        ancestor -> "#{shorten_module_name(ancestor)}:#{short_mod}"
       end
     else
-      {module_fn, nil}
+      short_mod
     end
+
+    {category, label}
   end
 
-  defp likely_system_mfa?(module_fn) do
-    String.starts_with?(module_fn, "erlang.apply") or
-      String.starts_with?(module_fn, "proc_lib.") or
-      String.starts_with?(module_fn, "gen.") or
-      String.starts_with?(module_fn, "gen_server.") or
-      String.starts_with?(module_fn, "supervisor.")
+  defp build_label_from_mfa(_target, nil, _ancestors), do: {"?", "unknown"}
+
+  defp generic_module_name?(name) do
+    name in ["Worker", "Server", "Handler", "Consumer", "Producer", "Process", "init"]
   end
 
-  defp infer_mfa_from_process(target, pid) do
-    with {:initial_call, {m, f, a}} when is_atom(m) <- :rpc.call(target, :erlang, :process_info, [pid, :initial_call], 2000),
-         true <- not system_module?(m) do
-      {m, f, a}
-    else
-      _ ->
-        case :rpc.call(target, :erlang, :process_info, [pid, :dictionary], 2000) do
-          {:dictionary, dict} when is_list(dict) ->
-            case Keyword.get(dict, :"$initial_call") do
-              {m, f, a} when is_atom(m) ->
-                if system_module?(m), do: nil, else: {m, f, a}
-              _ ->
-                nil
-            end
+  # =============================================================================
+  # Ancestor Analysis
+  # =============================================================================
 
-          _ ->
-            nil
-        end
-    end
-  rescue
-    _ -> nil
+  defp find_meaningful_ancestor(target, ancestors) do
+    ancestors
+    |> Enum.take(5)  # Don't go too deep
+    |> Enum.find_value(fn ancestor ->
+      name = get_ancestor_name(target, ancestor)
+      if meaningful_name?(name), do: name, else: nil
+    end)
   end
 
-  defp system_module?(m) do
-    m in [:erlang, :proc_lib, :gen, :gen_server, :supervisor]
-  end
-
-  defp infer_owner(target, pid), do: infer_owner(target, pid, 3)
-
-  defp infer_owner(_target, _pid, depth) when depth <= 0, do: nil
-
-  defp infer_owner(target, pid, depth) do
-    case :rpc.call(target, :erlang, :process_info, [pid, :parent], 2000) do
-      {:parent, p} when is_pid(p) ->
-        case owner_label(target, p) do
-          nil -> infer_owner(target, p, depth - 1)
-          label -> label
-        end
-
+  defp get_ancestor_name(target, ancestor) when is_pid(ancestor) do
+    case safe_rpc(target, :erlang, :process_info, [ancestor, :registered_name]) do
+      {:registered_name, name} when is_atom(name) and name != nil ->
+        name |> Atom.to_string() |> String.replace("Elixir.", "")
       _ ->
         nil
     end
-  rescue
-    _ -> nil
   end
 
-  defp owner_label(target, parent_pid) do
-    case :rpc.call(target, :erlang, :process_info, [parent_pid, :registered_name], 2000) do
-      {:registered_name, name} when is_atom(name) and name != nil ->
-        infer_subsystem(Atom.to_string(name))
+  defp get_ancestor_name(_target, ancestor) when is_atom(ancestor) do
+    ancestor |> Atom.to_string() |> String.replace("Elixir.", "")
+  end
 
-      _ ->
-        case :rpc.call(target, :erlang, :process_info, [parent_pid, :initial_call], 2000) do
-          {:initial_call, {m, f, a}} when is_atom(m) and is_atom(f) ->
-            mod_str = m |> Atom.to_string() |> String.replace("Elixir.", "")
-            infer_subsystem("#{mod_str}.#{f}/#{a}")
+  defp get_ancestor_name(_target, _), do: nil
 
-          _ ->
-            nil
+  defp ancestor_contains?(target, ancestors, pattern) do
+    Enum.any?(ancestors, fn ancestor ->
+      name = get_ancestor_name(target, ancestor)
+      name != nil and String.contains?(String.downcase(name), String.downcase(pattern))
+    end)
+  end
+
+  defp meaningful_name?(nil), do: false
+  defp meaningful_name?(name) do
+    # Skip generic system names
+    not String.starts_with?(name, "Elixir.") and
+    name not in ["supervisor", "gen_server", "application_master", "kernel_sup", "code_server"] and
+    not String.contains?(name, "#PID")
+  end
+
+  # =============================================================================
+  # Pool Name Extraction
+  # =============================================================================
+
+  defp find_pool_name(target, ancestors) do
+    ancestors
+    |> Enum.find_value(fn ancestor ->
+      name = get_ancestor_name(target, ancestor)
+      cond do
+        name == nil -> nil
+        String.contains?(name, "Pool") -> name
+        String.ends_with?(name, ".Sup") -> String.replace_suffix(name, ".Sup", "")
+        true -> nil
+      end
+    end)
+  end
+
+  defp find_nimble_pool_name(target, ancestors) do
+    find_pool_name(target, ancestors)
+  end
+
+  defp find_repo_name(target, ancestors) do
+    ancestors
+    |> Enum.find_value(fn ancestor ->
+      name = get_ancestor_name(target, ancestor)
+      cond do
+        name == nil -> nil
+        String.contains?(name, "Repo") -> name
+        String.contains?(name, "Pool") -> name
+        true -> nil
+      end
+    end)
+  end
+
+  # =============================================================================
+  # Module Name Shortening
+  # =============================================================================
+
+  defp shorten_module_name(nil), do: "?"
+
+  defp shorten_module_name(name) when is_binary(name) do
+    name
+    |> String.replace("Elixir.", "")
+    |> String.split(".")
+    |> case do
+      # Single word - keep as is
+      [single] -> single
+
+      # Two parts - keep both
+      [a, b] -> "#{a}.#{b}"
+
+      # Three+ parts - keep last two meaningful parts
+      parts ->
+        parts
+        |> Enum.reject(&(&1 in ["Supervisor", "Server", "Worker", "Sup"]))
+        |> Enum.take(-2)
+        |> Enum.join(".")
+        |> case do
+          "" -> List.last(parts)
+          short -> short
         end
     end
+    |> String.replace(~r/Supervisor$/, "Sup")
+    |> String.replace(~r/Controller$/, "Ctrl")
+    |> String.replace(~r/Handler$/, "Hndlr")
+  end
+
+  defp shorten_module_name(atom) when is_atom(atom) do
+    shorten_module_name(Atom.to_string(atom))
+  end
+
+  # =============================================================================
+  # Helper Functions
+  # =============================================================================
+
+  defp extract_module_name({mod, _fun, _arity}) when is_atom(mod) do
+    mod |> Atom.to_string() |> String.replace("Elixir.", "")
+  end
+  defp extract_module_name(_), do: nil
+
+  defp extract_task_function({_mod, fun, _arity}) when is_atom(fun) do
+    Atom.to_string(fun)
+  end
+  defp extract_task_function(_), do: nil
+
+  defp format_mfa({mod, fun, arity}) when is_atom(mod) and is_atom(fun) do
+    mod_str = mod |> Atom.to_string() |> String.replace("Elixir.", "")
+    "#{mod_str}.#{fun}/#{arity}"
+  end
+  defp format_mfa(_), do: nil
+
+  defp categorize_registered_name(name) do
+    cond do
+      String.contains?(name, "Supervisor") or String.ends_with?(name, ".Sup") -> "Sup"
+      String.contains?(name, "Registry") -> "Registry"
+      String.contains?(name, "Pool") -> "Pool"
+      String.contains?(name, "Cache") -> "Cache"
+      String.contains?(name, "Server") -> "GenServer"
+      String.contains?(name, "Manager") -> "Manager"
+      String.contains?(name, "Worker") -> "Worker"
+      true -> "Named"
+    end
+  end
+
+  defp safe_rpc(target, mod, fun, args) do
+    if target == node() do
+      apply(mod, fun, args)
+    else
+      case :rpc.call(target, mod, fun, args, 2000) do
+        {:badrpc, _} -> nil
+        result -> result
+      end
+    end
   rescue
     _ -> nil
-  end
-
-  defp infer_subsystem(label) when is_binary(label) do
-    cond do
-      String.contains?(label, "Phoenix") -> "Phoenix"
-      String.contains?(label, "LiveView") -> "LiveView"
-      String.contains?(label, "Liveview") -> "LiveView"
-      String.contains?(label, "Ecto") -> "Ecto"
-      String.contains?(label, "Bandit") -> "Bandit"
-      String.contains?(label, "Cowboy") -> "Cowboy"
-      String.contains?(label, "Ranch") -> "Ranch"
-      String.contains?(label, "Plug") -> "Plug"
-      String.contains?(label, "Finch") -> "Finch"
-      String.contains?(label, "Mint") -> "Mint"
-      String.contains?(label, "Telemetry") -> "Telemetry"
-      true -> label
-    end
-  end
-
-  defp build_display_name(nil, module_fn, nil), do: clean_label(module_fn)
-  defp build_display_name(app, module_fn, nil), do: clean_label("#{app}/#{module_fn}")
-  defp build_display_name(nil, module_fn, owner), do: clean_label("#{module_fn} ← #{owner}")
-  defp build_display_name(app, module_fn, owner), do: clean_label("#{app}/#{module_fn} ← #{owner}")
-
-  defp clean_label(label) when is_binary(label) do
-    if String.contains?(label, "#PID") do
-      "_app."
-    else
-      label
-    end
-  end
-
-
-  defp detect_type(mod_str, fun) do
-    cond do
-      String.contains?(mod_str, "Supervisor") -> "SUP"
-      String.contains?(mod_str, "DynamicSupervisor") -> "DYN"
-      String.contains?(mod_str, "GenServer") or fun == :init -> "GEN"
-      String.contains?(mod_str, "GenEvent") -> "GEV"
-      String.contains?(mod_str, "GenStateMachine") -> "GSM"
-      String.contains?(mod_str, "Task") -> "TSK"
-      String.contains?(mod_str, "Agent") -> "AGT"
-      String.contains?(mod_str, "Phoenix") -> "PHX"
-      String.contains?(mod_str, "Plug") -> "PLG"
-      String.contains?(mod_str, "Ecto") -> "ECT"
-      String.contains?(mod_str, "Logger") -> "LOG"
-      String.contains?(mod_str, "Telemetry") -> "TEL"
-      String.contains?(mod_str, "Finch") -> "FIN"
-      String.contains?(mod_str, "Mint") -> "MNT"
-      String.contains?(mod_str, "Bandit") -> "BAN"
-      String.contains?(mod_str, "Registry") -> "REG"
-      String.contains?(mod_str, "Cowboy") -> "COW"
-      String.contains?(mod_str, "Ranch") -> "RAN"
-      String.contains?(mod_str, "Pool") -> "POL"
-      mod_str == "supervisor" -> "SUP"
-      true -> "PRC"
-    end
   end
 
   # Intelligently shorten name to show rightmost distinct Module.Function/Arity

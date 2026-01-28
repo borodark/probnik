@@ -27,11 +27,15 @@ defmodule Probnik.Scene.Main do
     # 1x4 stacked layout (portrait)
     padding_x = 30 * sx
     padding_top = 30 * sy
-    padding_bottom = 20 * sy
+    padding_bottom = 50 * sy  # Extra space for footer
     row_gap = 10 * sy
     widget_width = vw - padding_x * 2
     available_height = vh - padding_top - padding_bottom - row_gap * 3
     widget_height = available_height / 4
+
+    # Get connected node info
+    remote_node = Application.get_env(:probnik, :remote_node, :unknown)
+    footer_text = "#{remote_node}"
 
     graph =
       Graph.build(font: :courier, font_size: max(12, round(24 * s)))
@@ -74,6 +78,13 @@ defmodule Probnik.Scene.Main do
         id: :memory_breakdown,
         translate: {padding_x, padding_top + (widget_height + row_gap) * 3}
       )
+      # Footer: connected node
+      |> text(footer_text,
+        fill: c.secondary,
+        font_size: max(42, round(84 * s)),
+        text_align: :right,
+        translate: {vw - padding_x, vh - 5}
+      )
 
     scene
     |> push_graph(graph)
@@ -89,11 +100,14 @@ defmodule Probnik.Scene.Main do
 
     padding_x = 30 * sx
     padding_top = 30 * sy
-    padding_bottom = 20 * sy
+    padding_bottom = 50 * sy
     row_gap = 10 * sy
     widget_width = w - padding_x * 2
     available_height = h - padding_top - padding_bottom - row_gap * 3
     widget_height = available_height / 4
+
+    remote_node = Application.get_env(:probnik, :remote_node, :unknown)
+    footer_text = "#{remote_node}"
 
     graph =
       Graph.build(font: :courier, font_size: max(12, round(24 * s)))
@@ -131,6 +145,12 @@ defmodule Probnik.Scene.Main do
       ],
         id: :memory_breakdown,
         translate: {padding_x, padding_top + (widget_height + row_gap) * 3}
+      )
+      |> text(footer_text,
+        fill: c.secondary,
+        font_size: max(42, round(84 * s)),
+        text_align: :right,
+        translate: {w - padding_x, h - 5}
       )
 
     {:noreply, scene |> push_graph(graph)}
