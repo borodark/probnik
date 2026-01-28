@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Probnik" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#e94560</item>
+        <item name="colorPrimaryVariant">#c73a52</item>
+        <item name="colorOnPrimary">#ffffff</item>
+        <item name="colorSecondary">#16213e</item>
+        <item name="colorSecondaryVariant">#0f3460</item>
+        <item name="colorOnSecondary">#ffffff</item>
+        <item name="android:statusBarColor">#1a1a2e</item>
+        <item name="android:navigationBarColor">#1a1a2e</item>
+    </style>
+
+    <style name="Theme.Probnik.Fullscreen" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#e94560</item>
+        <item name="colorOnPrimary">#ffffff</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+    </style>
+</resources>

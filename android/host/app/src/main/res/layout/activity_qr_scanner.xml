@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/preview_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"/>
+
+    <!-- Scanning overlay with viewfinder frame -->
+    <View
+        android:layout_width="280dp"
+        android:layout_height="280dp"
+        android:background="@android:color/transparent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"/>
+
+    <TextView
+        android:id="@+id/scan_instruction"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Point camera at QR code"
+        android:textColor="#ffffff"
+        android:textSize="18sp"
+        android:fontFamily="monospace"
+        android:shadowColor="#000000"
+        android:shadowRadius="4"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="120dp"/>
+
+    <TextView
+        android:id="@+id/scan_hint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Run ProbnikQR.show() on target node"
+        android:textColor="#aaaaaa"
+        android:textSize="14sp"
+        android:fontFamily="monospace"
+        android:shadowColor="#000000"
+        android:shadowRadius="4"
+        app:layout_constraintTop_toBottomOf="@id/scan_instruction"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="8dp"/>
+
+    <TextView
+        android:id="@+id/status_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Scanning..."
+        android:textColor="#e94560"
+        android:textSize="16sp"
+        android:fontFamily="monospace"
+        android:shadowColor="#000000"
+        android:shadowRadius="4"
+        app:layout_constraintBottom_toTopOf="@id/cancel_button"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginBottom="32dp"/>
+
+    <Button
+        android:id="@+id/cancel_button"
+        android:layout_width="wrap_content"
+        android:layout_height="60dp"
+        android:text="Cancel"
+        android:textSize="18sp"
+        android:fontFamily="monospace"
+        android:textAllCaps="false"
+        android:backgroundTint="#444444"
+        android:paddingStart="48dp"
+        android:paddingEnd="48dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginBottom="48dp"/>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

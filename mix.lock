@@ -1,5 +1,6 @@
 %{
   "elixir_make": {:hex, :elixir_make, "0.7.8", "505026f266552ee5aabca0b9f9c229cbb496c689537c9f922f3eb5431157efc7", [:mix], [{:castore, "~> 0.1 or ~> 1.0", [hex: :castore, repo: "hexpm", optional: true]}, {:certifi, "~> 2.0", [hex: :certifi, repo: "hexpm", optional: true]}], "hexpm", "7a71945b913d37ea89b06966e1342c85cfe549b15e6d6d081e8081c493062c07"},
+  "eqrcode": {:hex, :eqrcode, "0.1.10", "6294fece9d68ad64eef1c3c92cf111cfd6469f4fbf230a2d4cc905a682178f3f", [:mix], [], "hexpm", "da30e373c36a0fd37ab6f58664b16029919896d6c45a68a95cc4d713e81076f1"},
   "ex_image_info": {:hex, :ex_image_info, "0.2.7", "0460539183b6fd5f4ab2d068839922379d6b27c28b25f11757fdf28a5f5c79b1", [:mix], [], "hexpm", "c17cd937e044e2a26962c37cd8965acc0b31cb5fe7bc8119c721546b943c06ca"},
   "font_metrics": {:hex, :font_metrics, "0.5.2", "4a3f0223308f999a9773adc026e1f81fb094973160b31eabb4d0850be3781088", [:mix], [{:nimble_options, "~> 0.3 or ~> 1.0", [hex: :nimble_options, repo: "hexpm", optional: false]}], "hexpm", "8a3b10555b35988366f98adc62de0151f4869e8179a59cc84aa5a68701615ffd"},
   "input_event": {:hex, :input_event, "1.4.2", "8ad280387595110cf4ac4d92cfcfd2f5d61f7285084f35adc5feec077df23058", [:make, :mix], [{:elixir_make, "~> 0.6", [hex: :elixir_make, repo: "hexpm", optional: false]}], "hexpm", "eb12e3a5d83f2c570d965ad0a5de7bea7c9f387b425ae882c00f3a2a00971e3f"},

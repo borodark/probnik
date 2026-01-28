@@ -35,7 +35,8 @@ defmodule Probnik.MixProject do
       {:scenic, "~> 0.11"},
       {:scenic_driver_local, "~> 0.11"},
       {:scenic_driver_remote, git: "https://github.com/borodark/scenic_driver_remote.git"},
-      {:recon, "~> 2.5"}
+      {:recon, "~> 2.5"},
+      {:probnik_qr, path: "../probnik_qr"}
     ]
   end
 end
