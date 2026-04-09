@@ -8,7 +8,7 @@ an Android host app via Unix domain sockets for OpenGL ES 3.0 rendering.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      Android APK                             │
+│                      Android APK                            │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────────┐          ┌─────────────────────────┐   │
 │  │   Host App      │          │   BEAM Process          │   │
